@@ -42,6 +42,11 @@ passes after it. The policy in `jambu_gpu/core/policy.py` and the watchdog that
 runs on the instance must keep agreeing: the watchdog inlines that module at
 provision time.
 
+`tests/test_integration.py` does not mock the boot. It runs the onstart script
+the engine generated, starts the real watchdog, waits on a real health endpoint,
+runs a workload with real heartbeats, and asserts the guard stops the instance
+with the right reason.
+
 ## What you may change
 
 | Change | Where it goes |
