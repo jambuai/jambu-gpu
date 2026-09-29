@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.jambu/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.coverage
+node_modules/
+*.tsbuildinfo

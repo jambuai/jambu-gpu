@@ -1,0 +1,42 @@
+# jambu.yaml - shared manifest across Jambu.ai Lab sub-projects.
+# .env at repo root already has VAST_API_KEY / HF_TOKEN.
+# This tool only reads the gpu_runtime: key; other Jambu Lab tools can
+# add their own top-level keys to this same file.
+#
+# model/compute/runtime come from jambu.models.yaml (the shared catalog) -
+# this file only holds project policy: lifecycle, health, budget. See
+# docs/CHOOSING_A_MODEL.md for why the split, and `jambu-gpu profiles` to
+# see what's available.
+gpu_runtime:
+  version: 1
+
+  provider:
+    name: vast
+    profile: default
+
+  model_profile: qwythos-9b
+
+  lifecycle:
+    # Kept short for this first real run against a very new architecture -
+    # widen once you've confirmed it boots and serves cleanly.
+    max_lifetime: 2h
+    idle_timeout: 15m
+    auto_stop: true
+    auto_destroy: false
+    cleanup_on_setup_failure: true
+    allow_indefinite_lock: false
+    watchdog:
+      enabled: true
+      port: 8777
+      interval: 60s
+
+  health:
+    interval: 60s
+    # First boot on a brand-new architecture: HF download (9B + vision tower)
+    # plus, potentially, Triton kernel compilation for the Gated-DeltaNet
+    # layers. Generous on purpose.
+    startup_timeout: 25m
+
+  budget:
+    max_hourly_cost_usd: 1.50
+    max_session_cost_usd: 4.00
