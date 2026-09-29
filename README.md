@@ -9,7 +9,7 @@ Vast.ai is the first provider. Another provider is a new adapter. The lifecycle 
 ## Run
 
 ```bash
-pip install -e .
+pip install jambu-gpu
 
 cd your-experiment
 gpu init --model empero-ai/Qwythos-9B-v2

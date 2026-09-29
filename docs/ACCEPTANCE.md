@@ -1,6 +1,6 @@
 # Acceptance criteria — where each one is implemented and tested
 
-The spec's twelve guarantees, mapped to code and to the test that holds them.
+Twelve guarantees, mapped to the code and the test that holds each one.
 
 | # | Guarantee | Implementation | Test |
 | --- | --- | --- | --- |
@@ -23,6 +23,6 @@ The spec's twelve guarantees, mapped to code and to the test that holds them.
 vLLM runtime, `setup`, `run`, `status`, `stop`, `destroy`, `lock`/`unlock`, idle
 timeout, max lifetime, remote watchdog, structured logs — all present.
 
-Deliberately **not** implemented, per the spec: multi-instance scheduling, multi-GPU
+Deliberately not implemented: multi-instance scheduling, multi-GPU
 orchestration, Kubernetes, distributed inference, provider optimization, automatic
 provider selection, job queues, web dashboard.

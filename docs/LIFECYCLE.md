@@ -72,4 +72,4 @@ jambu_gpu/
 └── watchdog/     builder, agent_body
 ```
 
-Adding a provider: [ADDING_A_PROVIDER.md](ADDING_A_PROVIDER.md). Each guarantee in the spec, and the test that holds it: [ACCEPTANCE.md](ACCEPTANCE.md). The spec itself is [GPU Runtime CLI — Provider-Agnostic Provisioning & Lifecycle Spec](<GPU Runtime CLI — Provider-Agnostic Provisioning & Lifecycle Spec.md>).
+Adding a provider: [ADDING_A_PROVIDER.md](ADDING_A_PROVIDER.md). The guarantees and the tests that hold them: [ACCEPTANCE.md](ACCEPTANCE.md).
