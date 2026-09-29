@@ -351,3 +351,11 @@ Spec: `GPU Runtime CLI — Provider-Agnostic Provisioning & Lifecycle Spec.md`.
 ## License
 
 [MIT](LICENSE).
+
+---
+
+<p align="center">
+  <a href="https://jambu.ai">
+    <img src="docs/assets/jambu-logo.jpg" alt="Jambu.ai — Applied Intelligence Lab" width="280">
+  </a>
+</p>
