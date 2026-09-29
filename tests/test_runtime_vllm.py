@@ -1,5 +1,5 @@
 """vLLM already speaks both OpenAI agent-facing APIs; this locks down that
-jambu-gpu turns on the right flags for it and builds nothing of its own.
+gpu turns on the right flags for it and builds nothing of its own.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""`jambu-gpu inspect-model` - where jambu.yaml's numbers actually come from.
+"""`gpu inspect-model` - where jambu.yaml's numbers actually come from.
 
 Fetches the two public HuggingFace documents that answer "what should
 compute.gpu / runtime look like for this model" (see
@@ -68,7 +68,7 @@ def inspect_model_command(
     This is a starting point, not an oracle - the VRAM figure is weights plus
     a flat margin for KV cache/activations (which depend on context length
     and concurrency this command has no way to know). Confirm with
-    `jambu-gpu offers` and a real health check before trusting it in production.
+    `gpu offers` and a real health check before trusting it in production.
     """
     context = get_context(ctx)
     resolver = CredentialResolver(Path.cwd())
@@ -137,7 +137,7 @@ def inspect_model_command(
     console.print(result.to_yaml_snippet())
     console.print(
         Text(
-            f"\nTip: `jambu-gpu inspect-model {repo_id} --add-profile <name>` writes this "
+            f"\nTip: `gpu inspect-model {repo_id} --add-profile <name>` writes this "
             "straight into your model catalog instead of a one-off file.",
             style="dim",
         )
@@ -160,7 +160,7 @@ def profiles_command(
             console.print(
                 Text(
                     f"no {CATALOG_FILENAMES[0]} found in this directory or any parent. "
-                    "Create one with `jambu-gpu inspect-model <repo> --add-profile <name>`.",
+                    "Create one with `gpu inspect-model <repo> --add-profile <name>`.",
                     style="yellow",
                 )
             )

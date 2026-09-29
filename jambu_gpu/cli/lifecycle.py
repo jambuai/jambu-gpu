@@ -1,4 +1,4 @@
-"""`jambu-gpu lock|unlock|stop|destroy|guard` - lifecycle control."""
+"""`gpu lock|unlock|stop|destroy|guard` - lifecycle control."""
 
 from __future__ import annotations
 

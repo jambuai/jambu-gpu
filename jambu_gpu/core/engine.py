@@ -378,7 +378,7 @@ class Engine:
                     raise ConfigError(
                         f"instance {state.instance_id} was provisioned for a different "
                         "runtime (jambu.yaml changed since setup). Re-run with "
-                        "`--recreate` to replace it, or `jambu-gpu destroy` first."
+                        "`--recreate` to replace it, or `gpu destroy` first."
                     )
                 if not recreate:
                     self.echo(f"= reusing instance {state.instance_id} ({state.state})")
@@ -600,8 +600,8 @@ class Engine:
         state.watchdog.last_error = "did not answer within 90s"
         self.echo(
             "! the remote watchdog never answered. The instance is NOT protected "
-            "by an independent guard - check `jambu-gpu logs`, and run "
-            "`jambu-gpu destroy` if this is unexpected."
+            "by an independent guard - check `gpu logs`, and run "
+            "`gpu destroy` if this is unexpected."
         )
 
     def _wait_runtime(self, state: RuntimeState) -> None:
@@ -681,7 +681,7 @@ class Engine:
 
     def run(self, command: Sequence[str], label: str = "") -> int:
         if not command:
-            raise ConfigError("nothing to run: pass a command, e.g. `jambu-gpu run python x.py`")
+            raise ConfigError("nothing to run: pass a command, e.g. `gpu run python x.py`")
 
         state = self.ensure_ready()
         manager = ExecutionManager(
@@ -799,7 +799,7 @@ class Engine:
                 state.watchdog.last_error = "unreachable"
                 self.echo(
                     "! the remote watchdog did not accept the lock; it may still stop "
-                    "the instance. Check `jambu-gpu status`."
+                    "the instance. Check `gpu status`."
                 )
             state.locked = True
             state.locked_until = until

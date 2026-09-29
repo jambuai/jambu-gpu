@@ -1,7 +1,7 @@
 """Assembles the remote watchdog into a single self-contained script.
 
 The lifecycle *policy* is owned by the core and inlined verbatim from
-``core/policy.py`` so the remote guard and `jambu-gpu status` can never
+``core/policy.py`` so the remote guard and `gpu status` can never
 disagree. The *provider actions* are injected by the adapter. Neither side
 knows about the other.
 """

@@ -7,7 +7,7 @@ exercises the actual chain
     engine.setup -> generated boot script -> real watchdog agent
                  -> health wait -> run + heartbeats -> idle guard -> provider action
 
-which is everything between `jambu-gpu setup` and the GPU switching itself off.
+which is everything between `gpu setup` and the GPU switching itself off.
 """
 
 from __future__ import annotations

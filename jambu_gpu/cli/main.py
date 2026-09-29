@@ -1,4 +1,4 @@
-"""jambu-gpu entrypoint."""
+"""gpu entrypoint."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from . import lifecycle, providers, run, setup, status, validate
 from ._common import Context, err_console, get_context
 
 app = typer.Typer(
-    name="jambu-gpu",
+    name="gpu",
     help=(
         "Provider-agnostic CLI for provisioning and managing temporary GPU runtimes.\n\n"
         "jambu.yaml is the desired-state source of truth; .jambu/state.json is what "
@@ -75,7 +75,7 @@ def endpoint_command(ctx: typer.Context) -> None:
         err_console.print(f"error: {exc}")
         raise typer.Exit(getattr(exc, "exit_code", 1)) from exc
     if not state.endpoint:
-        err_console.print("error: no endpoint; run `jambu-gpu setup` first")
+        err_console.print("error: no endpoint; run `gpu setup` first")
         raise typer.Exit(3)
     print(state.endpoint)
 

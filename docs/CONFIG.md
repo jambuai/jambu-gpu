@@ -4,7 +4,7 @@
 and how long it may live. It must never contain credentials, and it never contains
 provider API details.
 
-`jambu.yaml` is a **shared manifest** across Jambu.ai Lab sub-projects: `jambu-gpu`
+`jambu.yaml` is a **shared manifest** across Jambu.ai Lab sub-projects: `gpu`
 reads only its own `gpu_runtime:` top-level key and ignores every other key in the
 document, so other Jambu tools can keep their own config in the same file:
 
@@ -16,10 +16,10 @@ gpu_runtime:
   ...
 
 some_other_jambu_tool:
-  ...      # not read by jambu-gpu, and jambu-gpu never errors on it
+  ...      # not read by gpu, and gpu never errors on it
 ```
 
-Don't need to share the file? `jambu-gpu init --flat` writes a `config.yml` where
+Don't need to share the file? `gpu init --flat` writes a `config.yml` where
 the whole document *is* the gpu-runtime config (no `gpu_runtime:` wrapper) — still
 fully supported. A bare document with no `gpu_runtime:` key is accepted under the
 `jambu.yaml` filename too, for a solo project that just prefers that name.
@@ -33,17 +33,17 @@ directory happens to have both.
 
 Unknown keys are a hard error — a typo in `idle_timeout` must not silently disable
 your cost protection. (This applies within the `gpu_runtime:` section; keys other
-tools own elsewhere in the document are none of `jambu-gpu`'s business.)
+tools own elsewhere in the document are none of `gpu`'s business.)
 
 ### `model_profile` — don't duplicate model config across files
 
 Set `model_profile: <name>` instead of declaring `model:`/`compute:`/`runtime:`
-directly, and jambu-gpu merges in that named entry from `jambu.models.yaml`
+directly, and gpu merges in that named entry from `jambu.models.yaml`
 (searched the same way as `jambu.yaml` — this directory, then parents, so one
 catalog serves every sub-project in a repo). Fields you *do* declare locally
 still win over the profile's. See
 [`docs/CHOOSING_A_MODEL.md`](CHOOSING_A_MODEL.md#dont-write-a-new-jambuyaml-per-model---use-the-catalog)
-for why this exists and `jambu-gpu profiles` / `jambu-gpu inspect-model
+for why this exists and `gpu profiles` / `gpu inspect-model
 --add-profile` to manage the catalog.
 
 ---
@@ -52,7 +52,7 @@ for why this exists and `jambu-gpu profiles` / `jambu-gpu inspect-model
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `name` | `vast` | Adapter to use. `jambu-gpu providers` lists what is available. |
+| `name` | `vast` | Adapter to use. `gpu providers` lists what is available. |
 | `profile` | `default` | Credential profile. Looks up `VAST_API_KEY__<profile>` before `VAST_API_KEY`. |
 | `options` | `{}` | Provider-specific tuning, validated by the adapter (see below). |
 
@@ -75,7 +75,7 @@ for why this exists and `jambu-gpu profiles` / `jambu-gpu inspect-model
 
 ## `compute`
 
-Not sure what to put here for a given model? `jambu-gpu inspect-model <repo>`
+Not sure what to put here for a given model? `gpu inspect-model <repo>`
 reads the model's real HuggingFace metadata and suggests values — see
 [`docs/CHOOSING_A_MODEL.md`](CHOOSING_A_MODEL.md) for exactly which source
 each number comes from.
@@ -124,14 +124,14 @@ How the model runs. Independent from where it runs.
 | `tool_call_parser` | – | Explicit vLLM parser name, overrides the guess. See [vLLM's tool calling docs](https://docs.vllm.ai/en/latest/features/tool_calling/) for the current list (`hermes`, `llama3_json`, `llama4_pythonic`, `mistral`, `granite`, `qwen3_xml`, `deepseek_v3`, ...). |
 | `tool_server` | – | MCP server URL (or `demo`) vLLM routes `/v1/responses` tool calls to **server-side**. Leave unset to let the calling agent framework execute tools itself. |
 
-`jambu-gpu inspect-model <repo>` suggests `dtype`, `context_length` and
+`gpu inspect-model <repo>` suggests `dtype`, `context_length` and
 `tool_calling` for a given model too — see
 [`docs/CHOOSING_A_MODEL.md`](CHOOSING_A_MODEL.md).
 
 ### Agentic flows: nothing to build
 
 vLLM's OpenAI-compatible server already implements both agent-facing APIs -
-`jambu-gpu` only turns on the right flags and hands you the same endpoint it
+`gpu` only turns on the right flags and hands you the same endpoint it
 always has:
 
 - **`/v1/chat/completions`** with `tools=[...]` - works with `tool_calling: auto`
@@ -143,12 +143,12 @@ always has:
   completions to actually *use* tools, and `tool_server` if you want vLLM to
   execute MCP tools itself instead of your agent framework doing it.
 
-`jambu-gpu run` exports `JAMBU_GPU_ENDPOINT`, `JAMBU_MODEL_ID` and
+`gpu run` exports `JAMBU_GPU_ENDPOINT`, `JAMBU_MODEL_ID` and
 `OPENAI_API_KEY` - the whole integration surface. Any OpenAI-SDK-compatible
-agent framework just works against the instance jambu-gpu provisioned;
+agent framework just works against the instance gpu provisioned;
 [`examples/mastra-agent/`](../examples/mastra-agent/) is a full installable
 [Mastra](https://mastra.ai) project built on exactly those three env vars.
-`jambu-gpu validate` and `jambu-gpu status` report which parser is active
+`gpu validate` and `gpu status` report which parser is active
 (`vLLM :8000 (model, tools=hermes)`); if it's missing for a model you expect
 to call tools, set `runtime.tool_call_parser` explicitly.
 
@@ -165,12 +165,12 @@ The cost protection. See [the safety invariant](#safety-invariant).
 | `auto_stop` | `true` | The guard may stop the instance. |
 | `auto_destroy` | `false` | The guard destroys instead of stopping. |
 | `cleanup_on_setup_failure` | `true` | Destroy partially created resources when setup fails. |
-| `allow_indefinite_lock` | `false` | Permit `jambu-gpu lock` with no TTL. |
+| `allow_indefinite_lock` | `false` | Permit `gpu lock` with no TTL. |
 | `heartbeat_interval` | `30s` | How often a running workload reports in. |
 | `heartbeat_grace` | `5m` | Missing heartbeats tolerated before a workload is stale. |
 | `ssh_counts_as_activity` | `false` | An SSH session alone is not useful work. |
 | `lock.enabled` | `false` | Whether locks are offered in this project. |
-| `lock.default_ttl` | `2h` | TTL used by `jambu-gpu lock` with no `--for`. |
+| `lock.default_ttl` | `2h` | TTL used by `gpu lock` with no `--for`. |
 | `watchdog.enabled` | `true` | Install the independent remote guard. |
 | `watchdog.port` | `8777` | Control port published on the instance. |
 | `watchdog.interval` | `60s` | How often the remote guard evaluates the policy. |
@@ -201,7 +201,7 @@ A passing health check is **not** activity. A healthy but unused server still go
 | `max_hourly_cost_usd` | – | Refuse to provision above this hourly price. |
 | `max_session_cost_usd` | – | The remote guard shuts down once accrued cost passes this. |
 
-Override once with `jambu-gpu setup --allow-cost-override`.
+Override once with `gpu setup --allow-cost-override`.
 
 ---
 

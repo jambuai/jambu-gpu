@@ -91,7 +91,7 @@ from the container's own environment (as the Vast adapter does with
 can, so the guard works even if the CLI never reconnects.
 
 Return `None` only if the provider genuinely cannot self-terminate; users then have
-to run `jambu-gpu guard` externally, and `validate` will warn.
+to run `gpu guard` externally, and `validate` will warn.
 
 ## 5. Publish the ports
 
