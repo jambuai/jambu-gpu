@@ -1,9 +1,9 @@
-"""Minimal workload: talk to the model jambu-gpu provisioned for you.
+"""Minimal workload: talk to the model gpu provisioned for you.
 
-    jambu-gpu setup
-    jambu-gpu run python examples/experiment.py
+    gpu setup
+    gpu run python examples/experiment.py
 
-jambu-gpu injects OPENAI_BASE_URL, OPENAI_API_KEY and JAMBU_MODEL_ID, so the
+gpu injects OPENAI_BASE_URL, OPENAI_API_KEY and JAMBU_MODEL_ID, so the
 OpenAI client needs no arguments. It also heartbeats for as long as this script
 runs, so the idle guard will not pull the GPU out from under it.
 """

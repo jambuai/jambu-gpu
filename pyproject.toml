@@ -25,7 +25,7 @@ dependencies = [
 dev = ["pytest>=8.0.0", "pytest-cov>=5.0.0", "respx>=0.21.0"]
 
 [project.scripts]
-jambu-gpu = "jambu_gpu.cli.main:main"
+gpu = "jambu_gpu.cli.main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["jambu_gpu"]

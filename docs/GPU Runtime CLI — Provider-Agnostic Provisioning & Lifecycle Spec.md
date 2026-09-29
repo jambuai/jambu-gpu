@@ -56,51 +56,51 @@ Provider adapters translate the stable internal contract into provider-specific 
 Working name:
 
 ```bash
-jambu-gpu
+gpu
 ```
 
 Core commands:
 
 ```bash
-jambu-gpu providers
-jambu-gpu validate
-jambu-gpu setup
-jambu-gpu run
-jambu-gpu status
-jambu-gpu lock
-jambu-gpu unlock
-jambu-gpu stop
-jambu-gpu destroy
+gpu providers
+gpu validate
+gpu setup
+gpu run
+gpu status
+gpu lock
+gpu unlock
+gpu stop
+gpu destroy
 ```
 
 Examples:
 
 ```bash
-jambu-gpu setup
+gpu setup
 ```
 
 Reads `config.yml`, selects the configured provider, provisions the instance, prepares the runtime and starts the configured model.
 
 ```bash
-jambu-gpu run experiments/run.py
+gpu run experiments/run.py
 ```
 
 Guarantees the configured runtime is available before executing the workload.
 
 ```bash
-jambu-gpu status
+gpu status
 ```
 
 Returns normalized provider-independent state.
 
 ```bash
-jambu-gpu stop
+gpu stop
 ```
 
 Stops the compute resource when supported.
 
 ```bash
-jambu-gpu destroy
+gpu destroy
 ```
 
 Destroys the remote resource.
@@ -264,7 +264,7 @@ class ProviderCapabilities:
 Example:
 
 ```bash
-jambu-gpu providers
+gpu providers
 ```
 
 could return:
@@ -383,13 +383,13 @@ This rule applies regardless of provider.
 Users can explicitly prevent automatic shutdown.
 
 ```bash
-jambu-gpu lock
+gpu lock
 ```
 
 Optional TTL:
 
 ```bash
-jambu-gpu lock --for 2h
+gpu lock --for 2h
 ```
 
 State:
@@ -521,7 +521,7 @@ The lifecycle policy must survive termination of the local CLI.
 # 15. Provisioning Flow
 
 ```text
-jambu-gpu setup
+gpu setup
        │
        ▼
 Load config.yml
@@ -576,7 +576,7 @@ Default should be `true`.
 # 16. Run Flow
 
 ```bash
-jambu-gpu run python experiments/qwythos_eval.py
+gpu run python experiments/qwythos_eval.py
 ```
 
 Flow:
@@ -647,7 +647,7 @@ If the provider supports pricing information, provisioning exceeding the configu
 Example:
 
 ```bash
-jambu-gpu setup --allow-cost-override
+gpu setup --allow-cost-override
 ```
 
 ---
@@ -659,7 +659,7 @@ Local state cannot be trusted as authoritative about remote infrastructure.
 Therefore:
 
 ```bash
-jambu-gpu status
+gpu status
 ```
 
 must reconcile:
@@ -845,7 +845,7 @@ Commands must be idempotent wherever practical.
 Running:
 
 ```bash
-jambu-gpu setup
+gpu setup
 ```
 
 twice MUST NOT create two instances.
@@ -861,7 +861,7 @@ no instance → provision
 Likewise:
 
 ```bash
-jambu-gpu stop
+gpu stop
 ```
 
 on an already stopped instance succeeds safely.
@@ -987,13 +987,13 @@ cd experiment
 
 export VAST_API_KEY=...
 
-jambu-gpu validate
+gpu validate
 
-jambu-gpu setup
+gpu setup
 
-jambu-gpu run python experiment.py
+gpu run python experiment.py
 
-jambu-gpu status
+gpu status
 ```
 
 and the following guarantees hold:

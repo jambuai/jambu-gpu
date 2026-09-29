@@ -1,4 +1,4 @@
-"""`jambu-gpu validate` - fail before provisioning (spec sections 5, 15)."""
+"""`gpu validate` - fail before provisioning (spec sections 5, 15)."""
 
 from __future__ import annotations
 

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "version": "0.1.0",
-  "description": "A real Mastra agent talking to the vLLM instance jambu-gpu provisioned - no custom glue code.",
+  "description": "A real Mastra agent talking to the vLLM instance the gpu command provisioned.",
   "scripts": {
     "start": "node --experimental-strip-types src/index.ts",
     "typecheck": "tsc --noEmit"

@@ -10,14 +10,14 @@
 #   jambu.yaml            -> policy: lifecycle, health, budget, watchdog -
 #                           "what varies by project", even for the same model
 #
-# Add an entry with `jambu-gpu inspect-model <repo> --add-profile <name>`
+# Add an entry with `gpu inspect-model <repo> --add-profile <name>`
 # instead of hand-writing one - see docs/CHOOSING_A_MODEL.md.
 
 qwythos-9b:
   # empero-ai/Qwythos-9B-v2 - Qwen3.5-based (hybrid Gated-DeltaNet), no
   # documented tool calling, but verified live: works with qwen3_xml (not
   # hermes - see docs/CHOOSING_A_MODEL.md's tool-call-parser section for the
-  # full story). "Qwythos" doesn't contain "qwen3" so jambu-gpu's guesser
+  # full story). "Qwythos" doesn't contain "qwen3" so gpu's guesser
   # can't find this on its own - both fields set explicitly here.
   model:
     id: empero-ai/Qwythos-9B-v2

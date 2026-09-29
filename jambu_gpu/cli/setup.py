@@ -1,4 +1,4 @@
-"""`jambu-gpu setup` / `init` / `offers` - provisioning entry points."""
+"""`gpu setup` / `init` / `offers` - provisioning entry points."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ def init_command(
             "HF_TOKEN=\n"
         )
         console.print(Text(f"+ wrote {env_example}", style="green"))
-    console.print("next: export VAST_API_KEY=... && jambu-gpu validate")
+    console.print("next: export VAST_API_KEY=... && gpu validate")
 
 
 def setup_command(
@@ -104,7 +104,7 @@ def setup_command(
             f"  openai    [bold]{state.endpoint.rstrip('/')}/v1[/bold]\n"
             f"  model     [bold]{state.model_id}[/bold]"
         )
-    console.print("\nnext: jambu-gpu run python your_experiment.py")
+    console.print("\nnext: gpu run python your_experiment.py")
 
 
 def offers_command(

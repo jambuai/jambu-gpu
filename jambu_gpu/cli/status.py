@@ -1,4 +1,4 @@
-"""`jambu-gpu status` / `logs` / `events` - reconciled observability."""
+"""`gpu status` / `logs` / `events` - reconciled observability."""
 
 from __future__ import annotations
 

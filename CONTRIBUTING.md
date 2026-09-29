@@ -6,18 +6,14 @@ agree it is licensed under the [MIT License](LICENSE).
 
 ## Command name
 
-The published command is `jambu-gpu`. Do not add a `gpu` console script.
+The published command is `gpu`. The package name stays `jambu-gpu`.
 
-`gpu` is a category noun. It collides with shell aliases, other GPU tools, and
-tab completion, and it describes a device rather than this lifecycle tool. The
-short name already exists where it belongs: the `gpu_runtime:` key inside
-`jambu.yaml`. Operators who want a shorter command set a **local** alias:
+Do not add a second console script. One command, in `pyproject.toml`:
 
-```bash
-alias jg='jambu-gpu'
+```toml
+[project.scripts]
+gpu = "jambu_gpu.cli.main:main"
 ```
-
-That alias stays in their shell. It is not part of the install.
 
 ## Setup
 

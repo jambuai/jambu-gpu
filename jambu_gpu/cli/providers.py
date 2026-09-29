@@ -1,4 +1,4 @@
-"""`jambu-gpu providers` - capability matrix (spec section 7)."""
+"""`gpu providers` - capability matrix (spec section 7)."""
 
 from __future__ import annotations
 

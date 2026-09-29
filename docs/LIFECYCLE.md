@@ -12,7 +12,7 @@ CLI ──provisions──> instance
                       └── vLLM :8000
 ```
 
-The watchdog script is generated at provision time. The lifecycle policy source is inlined from `jambu_gpu/core/policy.py`, so the remote guard and `jambu-gpu status` apply the same rule. The provider adapter injects only the two calls that stop or destroy the machine.
+The watchdog script is generated at provision time. The lifecycle policy source is inlined from `jambu_gpu/core/policy.py`, so the remote guard and `gpu status` apply the same rule. The provider adapter injects only the two calls that stop or destroy the machine.
 
 An instance stays billable only while:
 
@@ -31,7 +31,7 @@ A crashed CLI, a dropped SSH session, or a sleeping laptop stops the heartbeat. 
 Run the same rule from anywhere that has API access:
 
 ```bash
-*/5 * * * * cd /path/to/experiment && jambu-gpu guard
+*/5 * * * * cd /path/to/experiment && gpu guard
 ```
 
 `guard` evaluates the policy against reconciled state and enforces it.
@@ -40,7 +40,7 @@ Run the same rule from anywhere that has API access:
 
 The watchdog stops its own machine, so it needs provider API access. `VAST_API_KEY` is written on the instance at `/etc/jambu/watchdog.json` (mode 600).
 
-Use a dedicated, restricted Vast.ai key for this, not a personal key. Set `lifecycle.watchdog.enabled: false` to opt out. Shutdown then depends on `jambu-gpu guard` or on the CLI staying alive, and `validate` warns you.
+Use a dedicated, restricted Vast.ai key for this, not a personal key. Set `lifecycle.watchdog.enabled: false` to opt out. Shutdown then depends on `gpu guard` or on the CLI staying alive, and `validate` warns you.
 
 ## Architecture
 
@@ -48,7 +48,7 @@ Use a dedicated, restricted Vast.ai key for this, not a personal key. Set `lifec
 jambu.yaml (gpu_runtime:)
     │
     ▼
-jambu-gpu
+gpu
     │
     ├── Lifecycle    core/policy.py     the only shutdown rule
     ├── Runtime      runtime/vllm.py    how the model runs

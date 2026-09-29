@@ -4,7 +4,7 @@
 # model/compute/runtime come from ../jambu.models.yaml (the shared catalog,
 # found by walking up from this directory) - this file only holds this
 # project's policy: lifecycle, health, budget. See
-# docs/CHOOSING_A_MODEL.md for why the split, and `jambu-gpu profiles` to
+# docs/CHOOSING_A_MODEL.md for why the split, and `gpu profiles` to
 # see what's available.
 gpu_runtime:
   version: 1

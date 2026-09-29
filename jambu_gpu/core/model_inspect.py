@@ -12,7 +12,7 @@ Two public, documented HuggingFace endpoints - not scraping, not guessing:
            the actual signal HF's own `transformers`/vLLM use to decide
            whether a repo needs --trust-remote-code)
 
-`jambu-gpu inspect-model <repo>` fetches both, derives a VRAM estimate and a
+`gpu inspect-model <repo>` fetches both, derives a VRAM estimate and a
 tool-call-parser guess from them, and prints a ready `gpu_runtime:` snippet -
 every number it prints traces back to one of the two documents above, and the
 command says which field.
@@ -217,7 +217,7 @@ class ModelInspection:
                 f"    tool_calling: auto  # resolves to {self.suggested_tool_call_parser} automatically"
             )
         else:
-            lines.append("    tool_calling: auto  # jambu-gpu couldn't guess a parser for this repo name")
+            lines.append("    tool_calling: auto  # gpu couldn't guess a parser for this repo name")
             lines.append("    # tool_call_parser: ???  # set explicitly if this model does tool calling")
         return "\n".join(lines) + "\n"
 
@@ -350,7 +350,7 @@ def inspect_model(
         result.notes.append("config.json has auto_map - set model.trust_remote_code: true")
     if not result.suggested_tool_call_parser:
         result.notes.append(
-            "jambu-gpu could not guess a --tool-call-parser from this repo name "
+            "gpu could not guess a --tool-call-parser from this repo name "
             "(common for fine-tunes with custom names) - if the base model does "
             "tool calling, set runtime.tool_call_parser explicitly and verify with "
             "a live request; if unsure, leave tool_calling: auto (off) and test later"

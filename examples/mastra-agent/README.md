@@ -1,27 +1,27 @@
 # Mastra agent example
 
 A real, installable [Mastra](https://mastra.ai) agent project — not a hand-rolled
-tool-calling loop — running against the vLLM instance `jambu-gpu` provisioned for
-you. jambu-gpu builds no agent runtime; this is the actual Mastra pattern from
+tool-calling loop — running against the vLLM instance `gpu` provisioned for
+you. gpu builds no agent runtime; this is the actual Mastra pattern from
 [their own docs on tools](https://github.com/mastra-ai/mastra/blob/main/docs/src/content/en/docs/agents/tools.mdx),
 pointed at a self-hosted endpoint instead of the real OpenAI API.
 
-## What connects it to jambu-gpu
+## What connects it to gpu
 
 `src/agent.ts` reads three env vars — nothing else:
 
 | Env var | Set by |
 | --- | --- |
-| `JAMBU_GPU_ENDPOINT` | `jambu-gpu run` |
-| `JAMBU_MODEL_ID` | `jambu-gpu run` |
-| `OPENAI_API_KEY` | `jambu-gpu run` (or `runtime.api_key` in jambu.yaml) |
+| `JAMBU_GPU_ENDPOINT` | `gpu run` |
+| `JAMBU_MODEL_ID` | `gpu run` |
+| `OPENAI_API_KEY` | `gpu run` (or `runtime.api_key` in jambu.yaml) |
 
-That's the entire integration surface. No jambu-gpu SDK, no wrapper client.
+That's the entire integration surface. No gpu SDK, no wrapper client.
 
 ## Requirements on the jambu.yaml side
 
 Mastra calls `weatherTool` through vLLM's regular OpenAI tool-calling — which only
-fires if vLLM was started with a matching `--tool-call-parser`. jambu-gpu picks one
+fires if vLLM was started with a matching `--tool-call-parser`. gpu picks one
 automatically for recognized model families (`runtime.tool_calling: auto`, the
 default); for anything it doesn't recognize, set it explicitly:
 
@@ -29,14 +29,14 @@ default); for anything it doesn't recognize, set it explicitly:
 # jambu.yaml
 gpu_runtime:
   model:
-    id: Qwen/Qwen2.5-7B-Instruct   # jambu-gpu resolves "hermes" for this one
+    id: Qwen/Qwen2.5-7B-Instruct   # gpu resolves "hermes" for this one
 
   runtime:
     engine: vllm
     tool_calling: auto             # or: tool_call_parser: hermes
 ```
 
-Run `jambu-gpu validate` first — it warns if no parser could be resolved for your
+Run `gpu validate` first — it warns if no parser could be resolved for your
 `model.id`, which means the agent below would run but the model would never
 actually be able to call `weatherTool`.
 
@@ -47,11 +47,11 @@ cd examples/mastra-agent
 npm install
 cd ../..                    # back to wherever jambu.yaml lives
 
-jambu-gpu setup
-jambu-gpu run npm --prefix examples/mastra-agent start
+gpu setup
+gpu run npm --prefix examples/mastra-agent start
 ```
 
-`jambu-gpu run` guarantees the instance is READY and injects
+`gpu run` guarantees the instance is READY and injects
 `JAMBU_GPU_ENDPOINT` / `JAMBU_MODEL_ID` / `OPENAI_API_KEY` into that `npm start` —
 the same as it would for any other workload. You should see the model call
 `weatherTool` and answer with a real current-conditions sentence, e.g.:

@@ -126,7 +126,7 @@ class RuntimeConfigSection(_Base):
 
     # Agentic flows ride on vLLM's own OpenAI-compatible server - both
     # /v1/chat/completions (with tools) and /v1/responses (the OpenAI
-    # Responses API) are already implemented there. Nothing for jambu-gpu to
+    # Responses API) are already implemented there. Nothing for gpu to
     # build; these fields only turn on the right vLLM flags.
     #   auto -> guess a --tool-call-parser from model.id, enable if recognized
     #   on   -> require a resolvable parser (explicit tool_call_parser or a
@@ -307,7 +307,7 @@ class RuntimeConfig(_Base):
         instance - it is never regenerated for an existing instance. A field
         missing here means changing it (e.g. runtime.tool_calling) silently
         keeps serving the OLD command forever, no matter how many times the
-        instance is stopped and restarted, while `jambu-gpu status` reports
+        instance is stopped and restarted, while `gpu status` reports
         the NEW config as if it were live. Confirmed the hard way: flipping
         tool_calling on for an already-provisioned instance did nothing until
         this was fixed - only `--recreate` regenerates the onstart script.
@@ -439,7 +439,7 @@ def load_config(path: Optional[Path] = None, start: Optional[Path] = None) -> Ru
     if resolved is None:
         raise ConfigError(
             "no jambu.yaml (or config.yml) found in this directory or any "
-            "parent. Run `jambu-gpu init` to create one."
+            "parent. Run `gpu init` to create one."
         )
     if not resolved.is_file():
         raise ConfigError(f"config file not found: {resolved}")

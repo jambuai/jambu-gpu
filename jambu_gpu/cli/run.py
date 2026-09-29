@@ -1,4 +1,4 @@
-"""`jambu-gpu run` - execute a workload against a guaranteed runtime (spec section 16)."""
+"""`gpu run` - execute a workload against a guaranteed runtime (spec section 16)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def run_command(
         ...,
         help=(
             "Command to execute, e.g. `python experiments/run.py`. Flags are passed "
-            "through; put `--` first if one collides with a jambu-gpu option."
+            "through; put `--` first if one collides with a gpu option."
         ),
     ),
     label: str = typer.Option("", "--label", help="Human label recorded with the workload."),

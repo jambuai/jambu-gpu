@@ -339,7 +339,7 @@ class StateStore:
                 except BlockingIOError:
                     if time.time() >= deadline:
                         raise StateError(
-                            "another jambu-gpu command is holding the runtime lock "
+                            "another gpu command is holding the runtime lock "
                             f"({self.lock_path}); retry when it finishes"
                         ) from None
                     time.sleep(0.2)

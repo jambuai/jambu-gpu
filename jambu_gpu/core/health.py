@@ -58,5 +58,5 @@ def wait_for_healthy(
     raise RuntimeStartupError(
         f"model server did not become healthy within {int(timeout)}s "
         f"({url}, last probe: {last_detail}). "
-        "Check `jambu-gpu logs` - model downloads can be slow on first boot."
+        "Check `gpu logs` - model downloads can be slow on first boot."
     )

@@ -5,10 +5,10 @@ you're deploying (VRAM, dtype, context length, tool-call parser,
 `trust_remote_code`) has a real source. This is that source, and the command
 that reads it for you.
 
-## `jambu-gpu inspect-model`
+## `gpu inspect-model`
 
 ```bash
-jambu-gpu inspect-model Qwen/Qwen2.5-7B-Instruct
+gpu inspect-model Qwen/Qwen2.5-7B-Instruct
 ```
 
 ```text
@@ -47,8 +47,8 @@ lives under a different env var than `HF_TOKEN`.
 
 **This is a starting point, not an oracle.** It never talks to Vast.ai and
 never boots anything — it only reads two public HuggingFace documents and does
-arithmetic. Confirm the real number with `jambu-gpu offers` (finds actual
-capacity at that size) and a real `jambu-gpu setup` (the only way to know a
+arithmetic. Confirm the real number with `gpu offers` (finds actual
+capacity at that size) and a real `gpu setup` (the only way to know a
 model genuinely boots and serves).
 
 ## The two documents, and exactly what each field feeds
@@ -74,7 +74,7 @@ to know how to load it.
 | JSON field | Feeds | Notes |
 | --- | --- | --- |
 | `architectures` | recognizing the model family | e.g. `Qwen3_5ForConditionalGeneration`. Cross-reference against [vLLM's supported models](https://docs.vllm.ai/en/latest/models/supported_models/) — an unlisted architecture will fail to load regardless of VRAM. |
-| `model_type` | hybrid-attention detection | jambu-gpu flags known linear-attention families (`qwen3_5`/`qwen3_6`/`qwen3_8`, `jamba`, `mamba`, `bamba`, `deltanet`/`gdn` in the string, ...) — these need an **Ampere-or-newer** GPU for their Triton/FLA kernels. Confirmed the hard way: a Turing card (Quadro RTX 8000) failed to boot vLLM at all for a `qwen3_5` model; Ampere (RTX A6000) worked immediately. |
+| `model_type` | hybrid-attention detection | gpu flags known linear-attention families (`qwen3_5`/`qwen3_6`/`qwen3_8`, `jamba`, `mamba`, `bamba`, `deltanet`/`gdn` in the string, ...) — these need an **Ampere-or-newer** GPU for their Triton/FLA kernels. Confirmed the hard way: a Turing card (Quadro RTX 8000) failed to boot vLLM at all for a `qwen3_5` model; Ampere (RTX A6000) worked immediately. |
 | `torch_dtype` | `runtime.dtype`, VRAM estimate (fallback) | Used only when the Hub API's `safetensors.parameters` is absent — the API's real on-disk dtype is preferred when both exist, since a repo can ship a different dtype than it trained in. |
 | `quantization_config.quant_method` | VRAM estimate, `runtime.dtype: auto` | `fp8`/`awq`/`gptq`/`bitsandbytes_4bit` change the byte width per parameter; when present, set `runtime.dtype: auto` and let vLLM read the quantization from the checkpoint instead of forcing a dtype that fights it. |
 | `max_position_embeddings` | `runtime.context_length` | The model's *native* window. `inspect-model` suggests `min(native, 32768)` — the native number is often a YaRN-extended marketing ceiling (e.g. 1,048,576), not a sane default: allocating KV cache for the full window is neither necessary nor cheap for typical agentic/tool-use turns. |
@@ -106,7 +106,7 @@ Consequences:
   a working parser puts the call in `message.tool_calls`, not `message.content`.
   See [`docs/ADDING_A_PROVIDER.md`](ADDING_A_PROVIDER.md) for how the fingerprint
   interacts with runtime-only changes like this if you're doing it through
-  `jambu-gpu setup` rather than by hand.
+  `gpu setup` rather than by hand.
 - When you do confirm one empirically, add it to `_TOOL_PARSER_HINTS` in
   `jambu_gpu/core/tool_parsers.py` (a one-line PR) so `tool_calling: auto`
   picks it up for everyone next time, the same way the Qwen3.5+ finding did.
@@ -151,10 +151,10 @@ The project's own fields always win over the profile's - a profile is a set
 of defaults, not a lock, so a project can still override just one leaf
 (`compute.gpu.min_vram_gb: 80`, say) without redeclaring the whole model.
 
-`jambu-gpu inspect-model <repo> --add-profile <name>` writes straight into
+`gpu inspect-model <repo> --add-profile <name>` writes straight into
 the catalog (creating it if it doesn't exist) instead of printing a snippet
 to paste into a new file - the research and the config land in the same
-command. `jambu-gpu profiles` lists what's in it.
+command. `gpu profiles` lists what's in it.
 
 This is the same base+overlay pattern as docker-compose's `extends`, Helm
 `values.yaml`, or Kustomize overlays - one place owns "what", each consumer
@@ -191,8 +191,8 @@ runtime:
   extra_args: ["--kv-cache-dtype", "fp8"]
 ```
 
-Setting a flag jambu-gpu already manages through another field (`--model`,
+Setting a flag gpu already manages through another field (`--model`,
 `--port`, `--enable-auto-tool-choice`, ...) via `vllm_args` still works — it
-wins, since it's applied after those — but `jambu-gpu validate` warns about it,
+wins, since it's applied after those — but `gpu validate` warns about it,
 because the config field that's supposed to control that behavior (e.g.
 `runtime.tool_calling`) will silently stop reflecting what's actually running.

@@ -1,8 +1,8 @@
-# jambu-gpu
+# gpu
 
 Temporary GPU runtimes that stop billing when the work stops.
 
-You declare the model and how long it may live. jambu-gpu provisions a machine, starts the model server, and runs your job against it. Shutdown happens on the instance, so closing the laptop does not leave the GPU billing.
+You declare the model and how long it may live. `gpu` provisions a machine, starts the model server, and runs your job against it. Shutdown happens on the instance, so closing the laptop does not leave the GPU billing.
 
 Vast.ai is the first provider. Another provider is a new adapter. The lifecycle rule stays the same.
 
@@ -12,15 +12,15 @@ Vast.ai is the first provider. Another provider is a new adapter. The lifecycle 
 pip install -e .
 
 cd your-experiment
-jambu-gpu init --model empero-ai/Qwythos-9B-v2
+gpu init --model empero-ai/Qwythos-9B-v2
 export VAST_API_KEY=...
 
-jambu-gpu validate
-jambu-gpu setup
-jambu-gpu run python experiment.py
+gpu validate
+gpu setup
+gpu run python experiment.py
 ```
 
-When you are finished, `jambu-gpu destroy`. If you walk away, the idle timeout does it.
+When you are finished, `gpu destroy`. If you walk away, the idle timeout does it.
 
 The API key is read from the environment, a project `.env`, or `~/.jambu/credentials`. It never goes in the manifest.
 

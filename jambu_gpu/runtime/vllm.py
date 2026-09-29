@@ -3,7 +3,7 @@
 This is where "does it support agentic flows?" gets answered: vLLM's server
 already implements both ``/v1/chat/completions`` (with tool/function calling)
 and ``/v1/responses`` (the OpenAI Responses API, MCP-tool-routing included).
-jambu-gpu does not implement any of that - it only turns on the right vLLM
+gpu does not implement any of that - it only turns on the right vLLM
 flags and forwards the same endpoint/credentials it always has, so any
 OpenAI-SDK-compatible agent framework (LangChain, LangGraph, CrewAI, the
 `openai` SDK's own `responses.create`, ...) can talk to the instance with no
@@ -20,7 +20,7 @@ from ..core.models import ValidationResult
 from ..core.tool_parsers import guess_tool_call_parser  # noqa: F401 (re-exported)
 from .base import ModelRuntime
 
-# vLLM flags jambu-gpu already manages explicitly - collided with via
+# vLLM flags gpu already manages explicitly - collided with via
 # runtime.vllm_args, these would fight the config fields meant to control
 # them (compute.gpu, model.id, lifecycle port wiring, ...). Not a hard block
 # (power users can still reach them through raw extra_args if they really
@@ -188,7 +188,7 @@ class VllmRuntime(ModelRuntime):
         } & _MANAGED_VLLM_FLAGS
         if collisions:
             result.warn(
-                f"runtime.vllm_args sets {sorted(collisions)}, which jambu-gpu "
+                f"runtime.vllm_args sets {sorted(collisions)}, which gpu "
                 "already manages via other config fields (compute.gpu, model.id, "
                 "runtime.tool_calling, ...) - it will still be passed through and "
                 "win (last flag wins), but the field meant to control it won't "
