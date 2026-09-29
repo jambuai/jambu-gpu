@@ -1,0 +1,19 @@
+{
+  "name": "jambu-gpu-mastra-example",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "A real Mastra agent talking to the vLLM instance jambu-gpu provisioned - no custom glue code.",
+  "scripts": {
+    "start": "node --experimental-strip-types src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mastra/core": "^1.66.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
+  }
+}

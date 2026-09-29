@@ -1,0 +1,77 @@
+# jambu.yaml - shared across Jambu.ai Lab sub-projects. This tool only reads
+# the gpu_runtime: key below; add other tools' own top-level keys alongside
+# it without conflict. Credentials never live here.
+#
+# This file shows every field in one place, for reference. Running more than
+# one model? Don't copy this file per model - use `model_profile: <name>`
+# with a shared jambu.models.yaml catalog instead. See
+# docs/CHOOSING_A_MODEL.md and jambu.models.yaml in this repo for an example.
+gpu_runtime:
+  version: 1
+
+  provider:
+    name: vast
+    profile: default
+    # options:
+    #   verified_only: true
+    #   min_inet_down_mbps: 200
+
+  compute:
+    gpu:
+      min_vram_gb: 24
+      count: 1
+      # name_filter: RTX 4090
+    disk_gb: 80
+
+  model:
+    id: empero-ai/Qwythos-9B-v2
+    # revision: main
+    hf_token_env: HF_TOKEN
+
+  runtime:
+    engine: vllm
+    port: 8000
+    context_length: 16384
+    gpu_memory_utilization: 0.90
+    # extra_args: ["--enable-prefix-caching"]
+
+    # Agentic flows (tool calling on /v1/chat/completions and /v1/responses):
+    # vLLM already implements both, this only picks the right --tool-call-parser.
+    # auto guesses one from model.id; set explicitly if it can't.
+    tool_calling: auto
+    # tool_call_parser: hermes
+    # tool_server: demo   # let vLLM execute MCP tools server-side
+
+  lifecycle:
+    max_lifetime: 6h
+    idle_timeout: 15m
+
+    auto_stop: true
+    auto_destroy: false
+
+    cleanup_on_setup_failure: true
+    allow_indefinite_lock: false
+
+    heartbeat_interval: 30s
+    heartbeat_grace: 5m
+
+    lock:
+      enabled: false
+      default_ttl: 2h
+
+    watchdog:
+      enabled: true
+      port: 8777
+      interval: 60s
+
+  health:
+    interval: 60s
+    startup_timeout: 10m
+    path: /health
+
+  budget:
+    max_hourly_cost_usd: 1.00
+    max_session_cost_usd: 5.00
+
+  workload:
+    mode: local

@@ -1,0 +1,102 @@
+# The model catalog: one entry per model, referenced from any project's
+# jambu.yaml via `model_profile: <name>`. Searched the same way as
+# jambu.yaml (this directory, then parents) - one catalog serves every
+# sub-project in this repo (root, examples/, ...) without duplicating the
+# model/compute/runtime block into each one.
+#
+# What lives here vs. in a project's own jambu.yaml:
+#   catalog (this file)  -> model identity: which weights, how much VRAM,
+#                           dtype, tool-call parser - "what varies by model"
+#   jambu.yaml            -> policy: lifecycle, health, budget, watchdog -
+#                           "what varies by project", even for the same model
+#
+# Add an entry with `jambu-gpu inspect-model <repo> --add-profile <name>`
+# instead of hand-writing one - see docs/CHOOSING_A_MODEL.md.
+
+qwythos-9b:
+  # empero-ai/Qwythos-9B-v2 - Qwen3.5-based (hybrid Gated-DeltaNet), no
+  # documented tool calling, but verified live: works with qwen3_xml (not
+  # hermes - see docs/CHOOSING_A_MODEL.md's tool-call-parser section for the
+  # full story). "Qwythos" doesn't contain "qwen3" so jambu-gpu's guesser
+  # can't find this on its own - both fields set explicitly here.
+  model:
+    id: empero-ai/Qwythos-9B-v2
+    hf_token_env: HF_TOKEN
+    trust_remote_code: true
+  compute:
+    gpu:
+      min_vram_gb: 40
+      name_filter: A6000  # hybrid attention needs Ampere+, not Turing - confirmed the hard way
+      count: 1
+    disk_gb: 100
+  runtime:
+    engine: vllm
+    port: 8000
+    context_length: 32768
+    dtype: bfloat16
+    gpu_memory_utilization: 0.90
+    extra_args: ["--limit-mm-per-prompt", '{"image":0,"video":0}']
+    tool_calling: "on"
+    tool_call_parser: qwen3_xml
+
+qwen3.8-27b-uncensored:
+  # Abliterated Qwen3.8-27B, re-quantized to the OFFICIAL Qwen/Qwen3.8-27B-FP8
+  # scheme (not a bespoke quant) - fits the same A6000 class as qwythos-9b at
+  # ~28GB vs. the bf16 original's ~55GB. See the model.id comment for that
+  # bf16 original if quality matters more than cost here.
+  model:
+    id: orcarouter/Qwen3.8-27B-Uncensored-FP8
+    # bf16 original (higher quality, ~2x VRAM/cost - needs an 80GB-class
+    # card, A6000 isn't enough): JonathanColetti/Qwen3.8-27B-Uncensored
+    hf_token_env: HF_TOKEN
+    trust_remote_code: true
+  compute:
+    gpu:
+      min_vram_gb: 44
+      name_filter: A6000
+      count: 1
+    disk_gb: 100
+  runtime:
+    engine: vllm
+    port: 8000
+    context_length: 32768
+    dtype: auto  # quantization is declared in the checkpoint's own config.json
+    gpu_memory_utilization: 0.90
+    extra_args: ["--limit-mm-per-prompt", '{"image":0,"video":0}']
+    tool_calling: auto  # resolves to qwen3_xml automatically (qwen3.8 in the name)
+
+qwen3.8-35b-a3b-distill:
+  # The IsValorum GGUF release asked for is NOT used here: vLLM's GGUF loader
+  # doesn't reimplement the custom MoE-routing + Gated-DeltaNet kernels this
+  # architecture needs (that's llama.cpp's own native code, not something a
+  # generic GGUF loader carries over) - serving it on vLLM would very likely
+  # fail outright or perform badly. This is the safetensors base it was
+  # distilled/quantized from instead: empero-ai/Qwen3.8-35B-A3B-Distill,
+  # confirmed vLLM-native (an official vLLM serving recipe exists for the
+  # Qwen3.6-35B-A3B architecture family it shares).
+  #
+  # NOT abliterated - no clean safetensors abliterated release of this
+  # specific model was found; the abliteration only exists in GGUF form today.
+  #
+  # MoE: 35B TOTAL / ~3B active per token - sizing uses the total, because
+  # all experts must be resident in VRAM regardless of how few run per token.
+  # ~70GB of bf16 weights doesn't fit one 48GB card: split across two
+  # Ampere+ GPUs with tensor parallelism instead of hunting for a single
+  # 80-96GB card.
+  model:
+    id: empero-ai/Qwen3.8-35B-A3B-Distill
+    hf_token_env: HF_TOKEN
+  compute:
+    gpu:
+      min_vram_gb: 48  # per GPU - 2x48=96GB combined for ~70GB of weights + KV cache
+      name_filter: A6000
+      count: 2
+    disk_gb: 160
+  runtime:
+    engine: vllm
+    port: 8000
+    context_length: 32768
+    dtype: bfloat16
+    gpu_memory_utilization: 0.90
+    tensor_parallel_size: 2
+    tool_calling: auto  # resolves to qwen3_xml automatically (qwen3.8 in the name)

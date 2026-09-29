@@ -1,0 +1,36 @@
+# jambu.yaml - shared manifest across Jambu.ai Lab sub-projects. This tool
+# only reads the gpu_runtime: key below.
+#
+# model/compute/runtime come from ../jambu.models.yaml (the shared catalog,
+# found by walking up from this directory) - this file only holds this
+# project's policy: lifecycle, health, budget. See
+# docs/CHOOSING_A_MODEL.md for why the split, and `jambu-gpu profiles` to
+# see what's available.
+gpu_runtime:
+  version: 1
+
+  provider:
+    name: vast
+    profile: default
+
+  model_profile: qwythos-9b
+
+  lifecycle:
+    max_lifetime: 2h
+    idle_timeout: 15m
+    auto_stop: true
+    auto_destroy: false
+    cleanup_on_setup_failure: true
+    allow_indefinite_lock: false
+    watchdog:
+      enabled: true
+      port: 8777
+      interval: 60s
+
+  health:
+    interval: 60s
+    startup_timeout: 25m
+
+  budget:
+    max_hourly_cost_usd: 1.50
+    max_session_cost_usd: 4.00
