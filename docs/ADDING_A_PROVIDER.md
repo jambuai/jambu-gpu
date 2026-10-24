@@ -52,7 +52,12 @@ providers/runpod/
 
 The core never branches on `provider.name` — only on `provider.capabilities`. Set
 `stop_eliminates_billing=False` if a stopped instance still costs money; the policy
-then knows it may need to escalate to destroy.
+then knows it may need to escalate to destroy, and `lifecycle.stopped_ttl` applies.
+
+Set `list_instances=True` and implement `list_instances()` if the API can enumerate
+the account. Return only instances whose label starts with `JAMBU_LABEL_PREFIX`
+(`core/models.py`); `gpu ls` and `gpu sweep` are built on it and stay unavailable
+otherwise.
 
 ## 3. Normalize state and errors
 

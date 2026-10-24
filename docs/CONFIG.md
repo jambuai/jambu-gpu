@@ -162,6 +162,7 @@ The cost protection. See [the safety invariant](#safety-invariant).
 | --- | --- | --- |
 | `max_lifetime` | `6h` | Hard ceiling on instance age. `null` = unbounded. |
 | `idle_timeout` | `15m` | Shut down after this long with no activity. `null` = unbounded. |
+| `stopped_ttl` | `24h` | Destroy an instance that has been `STOPPED` this long. A stopped Vast instance no longer bills GPU time but still bills storage. `null` keeps stopped instances forever. |
 | `auto_stop` | `true` | The guard may stop the instance. |
 | `auto_destroy` | `false` | The guard destroys instead of stopping. |
 | `cleanup_on_setup_failure` | `true` | Destroy partially created resources when setup fails. |
@@ -169,6 +170,7 @@ The cost protection. See [the safety invariant](#safety-invariant).
 | `heartbeat_interval` | `30s` | How often a running workload reports in. |
 | `heartbeat_grace` | `5m` | Missing heartbeats tolerated before a workload is stale. |
 | `ssh_counts_as_activity` | `false` | An SSH session alone is not useful work. |
+| `traffic_counts_as_activity` | `true` | Requests served by the model runtime count as activity. The watchdog reads vLLM's `/metrics` on the instance (requests running or waiting, completed requests, prompt tokens), so an endpoint in use by something other than `gpu run` is not idled out. `false` = only workloads, startup and locks count. |
 | `lock.enabled` | `false` | Whether locks are offered in this project. |
 | `lock.default_ttl` | `2h` | TTL used by `gpu lock` with no `--for`. |
 | `watchdog.enabled` | `true` | Install the independent remote guard. |
@@ -179,6 +181,18 @@ At least one of `idle_timeout` / `max_lifetime` **must** be set — `validate` f
 otherwise.
 
 `idle_timeout` may not exceed `max_lifetime`.
+
+`max_lifetime` and `budget.max_session_cost_usd` are measured per **session**: from
+creation, and again from every restart of a stopped instance. A restart gets a fresh
+bound instead of being killed for the hours it spent stopped.
+
+`stopped_ttl` counts from when the instance was first observed stopped. On a
+provider where a stopped instance still bills, `validate` warns when `stopped_ttl`
+is `null` and `auto_destroy` is `false`: nothing would ever remove the instance.
+
+`gpu sweep` reuses `max_lifetime` and `stopped_ttl` from the nearest `jambu.yaml`
+as account-wide thresholds. See
+[Keeping the account clean](USAGE.md#keeping-the-account-clean).
 
 ---
 
@@ -199,7 +213,7 @@ A passing health check is **not** activity. A healthy but unused server still go
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `max_hourly_cost_usd` | – | Refuse to provision above this hourly price. |
-| `max_session_cost_usd` | – | The remote guard shuts down once accrued cost passes this. |
+| `max_session_cost_usd` | – | The remote guard shuts down once the current session's cost (session age x hourly price) passes this. |
 
 Override once with `gpu setup --allow-cost-override`.
 
