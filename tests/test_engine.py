@@ -394,16 +394,16 @@ def _engine(write_config, **overrides):
 
 
 def test_the_spec_asks_for_the_cuda_the_image_needs(write_config):
-    assert _engine(write_config).build_spec().gpu.cuda_min == "12.9"
-    latest = _engine(write_config, compute={"image": "vllm/vllm-openai:latest"})
-    assert latest.build_spec().gpu.cuda_min == "13.0"
+    assert _engine(write_config).build_spec().gpu.cuda_min == "13.0"
+    older = _engine(write_config, compute={"image": "vllm/vllm-openai:v0.29.0-cu129"})
+    assert older.build_spec().gpu.cuda_min == "12.9"
 
 
 def test_a_stricter_configured_cuda_floor_wins_and_a_looser_one_loses(write_config):
     strict = _engine(write_config, compute={"gpu": {"cuda_min": "13.1"}})
     assert strict.build_spec().gpu.cuda_min == "13.1"
     loose = _engine(write_config, compute={"gpu": {"cuda_min": "12.1"}})
-    assert loose.build_spec().gpu.cuda_min == "12.9"
+    assert loose.build_spec().gpu.cuda_min == "13.0"
 
 
 def test_an_image_of_unknown_cuda_keeps_the_configured_floor(write_config):
@@ -433,7 +433,7 @@ def test_validate_previews_offers_with_the_image_cuda_floor(write_config):
 
     engine.provider.validate = _validate
     engine.validate()
-    assert seen["cuda_min"] == "12.9"
+    assert seen["cuda_min"] == "13.0"
     assert engine.config.compute.gpu.cuda_min is None  # the loaded config is untouched
 
 

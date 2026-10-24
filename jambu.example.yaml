@@ -25,7 +25,7 @@ gpu_runtime:
     # Machines to try when one fails to boot (bad network, stuck image pull).
     host_attempts: 3
     # Pin the image: its CUDA build sets the minimum host driver (cu129 = 12.9).
-    # image: vllm/vllm-openai:v0.32.0-cu129
+    # image: vllm/vllm-openai:v0.32.0
 
   model:
     id: empero-ai/Qwythos-9B-v2

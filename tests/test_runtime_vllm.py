@@ -212,10 +212,10 @@ def test_the_cuda_a_vllm_image_needs_comes_from_its_tag(write_config, image, cud
     assert runtime.required_cuda() == cuda
 
 
-def test_the_default_image_is_pinned_to_a_cuda_12_build(config):
+def test_the_default_image_is_pinned_and_carries_its_cuda_floor(config):
     runtime = VllmRuntime(config)
-    assert runtime.image() == "vllm/vllm-openai:v0.32.0-cu129"
-    assert runtime.required_cuda() == 12.9
+    assert runtime.image() == "vllm/vllm-openai:v0.32.0"
+    assert runtime.required_cuda() == 13.0
 
 
 def test_vllm_declares_where_its_pid_and_log_live(config):

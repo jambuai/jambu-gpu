@@ -90,7 +90,7 @@ each number comes from.
 | `region` | – | Comma-separated geolocations. |
 | `spot` | `false` | Use interruptible/bid capacity where supported. |
 | `host_attempts` | `3` | How many machines `setup` tries. A host that fails to boot (the provider reports it failed, it vanishes, or it is not running within `health.boot_timeout`) is destroyed, never rented again by this setup, and replaced from fresh offers, each held to the budget. A model server that dies once its container runs fails at once: the same config would fail on any machine. Needs `lifecycle.cleanup_on_setup_failure`; without it the first failed host is kept for inspection. |
-| `image` | – | Override the runtime's container image. vLLM's default is `vllm/vllm-openai:v0.32.0-cu129`. Pin a tag: `validate` warns on `latest` or an untagged image, because the CUDA it needs can change under you. |
+| `image` | – | Override the runtime's container image. vLLM's default is `vllm/vllm-openai:v0.32.0`. Pin a tag: `validate` warns on `latest` or an untagged image, because the CUDA it needs can change under you. |
 
 ---
 

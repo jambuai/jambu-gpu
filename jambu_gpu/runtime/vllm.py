@@ -81,9 +81,10 @@ def flatten_vllm_args(mapping: dict[str, Any]) -> list[str]:
 LOG_PATH = "/var/log/jambu/vllm.log"
 PID_PATH = "/var/run/jambu/vllm.pid"
 
-# Pinned: `latest` moved to CUDA 13 (v0.32.0) and landed on hosts whose driver
-# tops out at 12.2, where vLLM dies at boot. The `-cuNNN` tag says what it needs.
-DEFAULT_IMAGE = "vllm/vllm-openai:v0.32.0-cu129"
+# Pinned, never `latest`: it moved to CUDA 13 under us and landed on a host
+# whose driver tops out at 12.2. The main build, not a `-cuNNN` variant: the
+# v0.32.0-cu129 variant ships a torchcodec that cannot load (seen live).
+DEFAULT_IMAGE = "vllm/vllm-openai:v0.32.0"
 VLLM_REPO = "vllm/vllm-openai"
 
 # CUDA behind the bare `vX.Y.Z` / `latest` tags (the image's NVIDIA_REQUIRE_CUDA),
