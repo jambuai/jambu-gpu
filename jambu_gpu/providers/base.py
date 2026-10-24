@@ -98,6 +98,14 @@ class GPUProvider(ABC):
         """Discover purchasable capacity (requires ``capabilities.pricing_query``)."""
         raise UnsupportedCapabilityError(f"{self.name} cannot query offers")
 
+    def list_instances(self) -> list[Instance]:
+        """Every instance of this tool in the account (requires ``capabilities.list_instances``).
+
+        Returns only instances whose label starts with ``JAMBU_LABEL_PREFIX``;
+        anything else in the account is not ours to report or touch.
+        """
+        raise UnsupportedCapabilityError(f"{self.name} cannot list instances")
+
     def watchdog_spec(self, spec_or_instance: Any) -> Optional[WatchdogSpec]:
         """Provider calls the remote watchdog uses to stop/destroy itself."""
         return None

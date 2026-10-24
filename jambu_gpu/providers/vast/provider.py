@@ -35,6 +35,7 @@ from ...core.models import (
     ProviderCapabilities,
     ValidationResult,
     Workload,
+    is_jambu_label,
 )
 from ..base import GPUProvider, WatchdogSpec
 from . import mapper
@@ -116,6 +117,7 @@ class VastProvider(GPUProvider):
         pricing_query=True,
         remote_exec=True,
         logs=True,
+        list_instances=True,
         # A stopped Vast instance no longer bills GPU time but still bills
         # storage, so the core may choose to escalate to destroy.
         stop_eliminates_billing=False,
@@ -172,12 +174,6 @@ class VastProvider(GPUProvider):
             result.error("provider cannot execute remote workloads", "workload.mode")
         if config.compute.gpu.count > 8:
             result.warn("more than 8 GPUs on a single Vast machine is rare", "compute.gpu.count")
-        if not self.capabilities.stop_eliminates_billing and not config.lifecycle.auto_destroy:
-            result.warn(
-                "a stopped Vast instance still bills storage; set "
-                "lifecycle.auto_destroy: true to remove it entirely",
-                "lifecycle.auto_destroy",
-            )
 
         try:
             user = self.client.whoami()
@@ -379,6 +375,14 @@ class VastProvider(GPUProvider):
             self.client.destroy_instance(instance.id)
         except VastNotFound:
             return
+
+    def list_instances(self) -> list[Instance]:
+        wanted = self._wanted_ports()
+        return [
+            mapper.map_instance(raw, wanted)
+            for raw in self.client.list_instances()
+            if is_jambu_label(raw.get("label"))
+        ]
 
     def logs(self, instance: Instance) -> LogStream:
         url = self.client.request_logs(instance.id, tail=800)

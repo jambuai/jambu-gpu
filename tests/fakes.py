@@ -18,6 +18,7 @@ from jambu_gpu.core.models import (
     ProviderCapabilities,
     ValidationResult,
     Workload,
+    is_jambu_label,
 )
 from jambu_gpu.providers.base import GPUProvider, WatchdogSpec
 
@@ -46,6 +47,7 @@ class FakeProvider(GPUProvider):
         logs=True,
         spot_instances=True,
         stop_eliminates_billing=True,
+        list_instances=True,
     )
 
     def __init__(self, config, credentials) -> None:
@@ -148,6 +150,10 @@ class FakeProvider(GPUProvider):
     def destroy(self, instance: Instance) -> None:
         self.calls.append(("destroy", instance.id))
         self.instances.pop(instance.id, None)
+
+    def list_instances(self) -> list[Instance]:
+        self.calls.append(("list", ""))
+        return [i for i in self.instances.values() if is_jambu_label(i.label)]
 
     def logs(self, instance: Instance) -> LogStream:
         return LogStream(iter(["line one", "line two"]), source="fake")

@@ -9,6 +9,7 @@ from typing import Optional
 import typer
 
 from ..core.errors import JambuError
+from . import account
 from . import inspect as inspect_cli
 from . import lifecycle, providers, run, setup, status, validate
 from ._common import Context, err_console, get_context
@@ -63,6 +64,8 @@ app.command("unlock")(lifecycle.unlock_command)
 app.command("stop")(lifecycle.stop_command)
 app.command("destroy")(lifecycle.destroy_command)
 app.command("guard")(lifecycle.guard_command)
+app.command("ls")(account.ls_command)
+app.command("sweep")(account.sweep_command)
 
 
 @app.command("endpoint")
