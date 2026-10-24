@@ -7,10 +7,12 @@ nothing Vast-shaped escapes the adapter.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Optional
 
 import httpx
 
+from ... import __version__
 from ...core.errors import (
     AuthenticationError,
     CapacityUnavailableError,
@@ -25,6 +27,18 @@ class VastNotFound(ProviderError):
     """The requested Vast object does not exist (any more)."""
 
 
+# Waits between attempts on a rate limit or a transient gateway error: about
+# 45 seconds in all before giving up.
+RETRY_DELAYS_S = (2.0, 4.0, 8.0, 15.0, 15.0)
+
+
+def _retry_after(response: httpx.Response, default: float) -> float:
+    try:
+        return min(60.0, max(0.0, float(response.headers.get("Retry-After", default))))
+    except ValueError:
+        return default
+
+
 class VastClient:
     def __init__(
         self,
@@ -37,6 +51,7 @@ class VastClient:
         self.api_base = api_base.rstrip("/")
         self.timeout = timeout
         self._client = client
+        self.sleep = time.sleep
 
     # -- transport ----------------------------------------------------------
 
@@ -49,7 +64,7 @@ class VastClient:
                     "Authorization": f"Bearer {self.api_key}",
                     "Accept": "application/json",
                     "Content-Type": "application/json",
-                    "User-Agent": "jambu-gpu/0.1",
+                    "User-Agent": f"jambu-gpu/{__version__}",
                 },
             )
         return self._client
@@ -68,12 +83,22 @@ class VastClient:
         params: Optional[dict] = None,
     ) -> Any:
         url = path if path.startswith("http") else f"{self.api_base}{path}"
-        try:
-            response = self.client.request(method, url, json=json_body, params=params)
-        except httpx.TimeoutException as exc:
-            raise ProviderTimeoutError(f"vast.ai timed out on {method} {path}") from exc
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"vast.ai request failed ({method} {path}): {exc}") from exc
+        for delay in (*RETRY_DELAYS_S, None):
+            try:
+                response = self.client.request(method, url, json=json_body, params=params)
+            except httpx.TimeoutException as exc:
+                raise ProviderTimeoutError(f"vast.ai timed out on {method} {path}") from exc
+            except httpx.HTTPError as exc:
+                raise ProviderError(f"vast.ai request failed ({method} {path}): {exc}") from exc
+            # Vast rate-limits bursts (a sweep timer and a setup at once are
+            # enough). A 429 was not processed, so any method can be resent;
+            # a 5xx only for reads, since a create may have gone through.
+            transient = response.status_code == 429 or (
+                method == "GET" and response.status_code in (502, 503, 504)
+            )
+            if not transient or delay is None:
+                break
+            self.sleep(_retry_after(response, delay))
 
         # These two are reliable regardless of what's in the body.
         if response.status_code == 404:

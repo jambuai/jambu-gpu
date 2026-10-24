@@ -366,3 +366,58 @@ def test_an_instance_reports_its_machine(provider):
 
     status = provider.status(Instance(id="19384723", provider="vast"))
     assert status.instance.host_id == "77"
+
+
+# -- rate limits ---------------------------------------------------------------
+
+
+def _client(sleeps):
+    from jambu_gpu.providers.vast.client import VastClient
+
+    client = VastClient("k")
+    client.sleep = sleeps.append
+    return client
+
+
+@respx.mock
+def test_a_rate_limit_is_waited_out():
+    route = respx.put(f"{API_BASE}/search/asks/").mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "3"}),
+            httpx.Response(429),
+            httpx.Response(200, json={"offers": [OFFER]}),
+        ]
+    )
+    sleeps: list = []
+    data = _client(sleeps).request("PUT", "/search/asks/", json_body={})
+    assert data["offers"][0]["id"] == 777
+    assert route.call_count == 3
+    assert sleeps == [3.0, 4.0]
+
+
+@respx.mock
+def test_a_rate_limit_that_never_lifts_is_an_error():
+    from jambu_gpu.core.errors import ProviderError
+    from jambu_gpu.providers.vast.client import RETRY_DELAYS_S
+
+    route = respx.get(f"{API_BASE}/instances/").mock(return_value=httpx.Response(429))
+    sleeps: list = []
+    with pytest.raises(ProviderError, match="rate limit"):
+        _client(sleeps).request("GET", "/instances/")
+    assert route.call_count == len(RETRY_DELAYS_S) + 1
+
+
+@respx.mock
+def test_a_gateway_error_is_retried_for_reads_but_not_for_a_create():
+    from jambu_gpu.core.errors import ProviderError
+
+    read = respx.get(f"{API_BASE}/instances/").mock(
+        side_effect=[httpx.Response(502), httpx.Response(200, json={"instances": []})]
+    )
+    assert _client([]).request("GET", "/instances/") == {"instances": []}
+    assert read.call_count == 2
+
+    create = respx.put(f"{API_BASE}/asks/777/").mock(return_value=httpx.Response(502))
+    with pytest.raises(ProviderError):
+        _client([]).request("PUT", "/asks/777/", json_body={})
+    assert create.call_count == 1
