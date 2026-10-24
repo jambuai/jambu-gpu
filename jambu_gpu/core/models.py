@@ -107,6 +107,8 @@ class ComputeSpec:
     spot: bool = False
     region: Optional[str] = None
     max_hourly_cost_usd: Optional[float] = None
+    # Machines (Offer.host_id) not to rent: hosts that already failed to boot.
+    exclude_hosts: list[str] = field(default_factory=list)
     # Free-form provider hints; adapters ignore keys they do not understand.
     provider_options: dict[str, Any] = field(default_factory=dict)
 
@@ -125,6 +127,9 @@ class Offer:
     score: Optional[float] = None
     # Highest CUDA version the host's driver supports, when the provider says.
     cuda_max: Optional[float] = None
+    # The physical machine behind the offer, when the provider says. Offers
+    # on one machine share its network, disk and Docker daemon.
+    host_id: Optional[str] = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -155,6 +160,8 @@ class Instance:
     ssh_user: str = "root"
     endpoints: dict[str, Endpoint] = field(default_factory=dict)
     label: str = ""
+    # The machine it runs on (see Offer.host_id).
+    host_id: Optional[str] = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     def endpoint_url(self, name: str) -> Optional[str]:
@@ -175,6 +182,7 @@ class Instance:
             "ssh_port": self.ssh_port,
             "ssh_user": self.ssh_user,
             "label": self.label,
+            "host_id": self.host_id,
             "endpoints": {
                 name: {
                     "url": ep.url,
@@ -210,6 +218,7 @@ class Instance:
             ssh_user=data.get("ssh_user", "root"),
             endpoints=endpoints,
             label=data.get("label", ""),
+            host_id=data.get("host_id"),
         )
 
 

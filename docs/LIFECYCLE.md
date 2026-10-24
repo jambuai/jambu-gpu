@@ -83,7 +83,7 @@ Inference traffic is counted on the instance only. When the watchdog is enabled 
 
 ## A model server that dies at boot
 
-The runtime start command writes the model server's pid to `/var/run/jambu/vllm.pid`. `GET /state` reports `runtime_alive`: `true` or `false` from that pid, `null` while there is no pid file yet (or only one older than the current container start). If the process is gone while the instance is still starting, the watchdog logs `runtime_exited` once and ends startup, so the idle rules apply instead of a startup grace (`startup_timeout` + 5 minutes) kept open by a dead server.
+The runtime start command writes the model server's pid to `/var/run/jambu/vllm.pid`. `GET /state` reports `runtime_alive`: `true` or `false` from that pid, `null` while there is no pid file yet (or only one older than the current container start). If the process is gone while the instance is still starting, the watchdog logs `runtime_exited` once and ends startup, so the idle rules apply instead of a startup grace (`boot_timeout` + `startup_timeout` + 5 minutes) kept open by a dead server.
 
 `gpu setup` asks the watchdog on every readiness poll. When `runtime_alive` is `false` it fails at once with the last 30 lines of the model server's log in the error (a CUDA driver mismatch, an out-of-memory, a bad flag), and `cleanup_on_setup_failure` destroys the instance.
 

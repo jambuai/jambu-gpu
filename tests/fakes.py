@@ -58,6 +58,21 @@ class FakeProvider(GPUProvider):
         self.offer_price = 0.42
         self.fail_setup: Optional[Exception] = None
         self.no_offers = False
+        # The marketplace: one offer per machine, cheapest first.
+        self.hosts = ["m1", "m2", "m3", "m4", "m5"]
+        self.host_prices: dict[str, float] = {}
+        # Machines that fail to boot, and how: "failed" (the provider reports
+        # FAILED), "vanish" (the instance disappears) or "loading" (it never
+        # reaches running).
+        self.failing_hosts: set[str] = set()
+        self.host_failure = "failed"
+        self.rented_hosts: list[str] = []
+        self.searches: list[list[str]] = []
+
+    def fail_first_hosts(self, count: int, how: str = "failed") -> None:
+        """Script the first ``count`` machines rented to fail to boot."""
+        self.failing_hosts = set(self.hosts[:count])
+        self.host_failure = how
 
     # -- contract -------------------------------------------------------
 
@@ -65,18 +80,24 @@ class FakeProvider(GPUProvider):
         return ValidationResult()
 
     def find_offers(self, spec: ComputeSpec, limit: int = 10) -> list[Offer]:
+        self.searches.append(list(spec.exclude_hosts))
         if self.no_offers:
             return []
-        return [
+        offers = [
             Offer(
-                id="offer-1",
+                id=f"offer-{host}",
                 gpu_name="RTX 4090",
                 gpu_count=spec.gpu.count,
                 gpu_vram_gb=float(spec.gpu.min_vram_gb),
                 disk_gb=float(spec.disk_gb),
-                hourly_cost_usd=self.offer_price,
+                hourly_cost_usd=self.host_prices.get(host, self.offer_price),
+                host_id=host,
             )
+            for host in self.hosts
+            if host not in spec.exclude_hosts
         ]
+        offers.sort(key=lambda o: o.hourly_cost_usd)
+        return offers[:limit]
 
     def setup(self, spec: ComputeSpec) -> Instance:
         if self.fail_setup is not None:
@@ -86,18 +107,25 @@ class FakeProvider(GPUProvider):
                 id=instance_id, provider=self.name, state=InstanceState.PROVISIONING
             )
             raise self.fail_setup
-        if self.no_offers:
+        offers = self.find_offers(spec)
+        if not offers:
             raise CapacityUnavailableError("no capacity")
+        offer = offers[0]
         self.counter += 1
         instance_id = f"i-{self.counter}"
+        failing = offer.host_id in self.failing_hosts
+        state = InstanceState.READY
+        if failing:
+            state = InstanceState.STARTING if self.host_failure == "loading" else InstanceState.FAILED
         instance = Instance(
             id=instance_id,
             provider=self.name,
-            state=InstanceState.READY,
+            state=state,
             created_at=time.time(),
             gpu_name="RTX 4090",
             gpu_count=spec.gpu.count,
-            hourly_cost_usd=self.offer_price,
+            hourly_cost_usd=offer.hourly_cost_usd,
+            host_id=offer.host_id,
             host="127.0.0.1",
             ssh_host="ssh.fake",
             ssh_port=2222,
@@ -108,6 +136,7 @@ class FakeProvider(GPUProvider):
             label=spec.label,
         )
         self.instances[instance_id] = instance
+        self.rented_hosts.append(offer.host_id)
         self.calls.append(("setup", instance_id))
         return instance
 
@@ -132,13 +161,24 @@ class FakeProvider(GPUProvider):
 
     def status(self, instance: Instance) -> InstanceStatus:
         stored = self.instances.get(instance.id)
+        if stored is not None and stored.host_id in self.failing_hosts:
+            if self.host_failure == "vanish":
+                self.instances.pop(instance.id)
+                stored = None
         if stored is None:
             return InstanceStatus(state=InstanceState.DESTROYED, exists=False)
+        message = ""
+        if stored.state is InstanceState.FAILED:
+            message = (
+                'Error response from daemon: Get "https://registry-1.docker.io/v2/": '
+                "net/http: TLS handshake timeout"
+            )
         return InstanceStatus(
             state=stored.state,
             instance=stored,
             exists=True,
             hourly_cost_usd=stored.hourly_cost_usd,
+            message=message,
         )
 
     def stop(self, instance: Instance) -> None:

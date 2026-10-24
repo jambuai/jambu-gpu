@@ -6,6 +6,8 @@ CLI behaves identically regardless of which provider is configured.
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class JambuError(Exception):
     """Base class for every error raised by the CLI."""
@@ -57,6 +59,24 @@ class BudgetExceededError(JambuError):
 
 class RuntimeStartupError(JambuError):
     exit_code = 11
+
+
+class HostFailure(RuntimeStartupError):
+    """The machine failed, not the config: another host may well succeed.
+
+    Raised while an instance boots, before its container runs: the provider
+    reports it failed (an image pull that never finished, a registry the host
+    cannot reach), it vanished, or it never reached running within
+    ``health.boot_timeout``. A model server that dies once the container runs
+    is a plain RuntimeStartupError - the same config would fail anywhere.
+    """
+
+    def __init__(self, message: str, reason: str = "", instance: Any = None) -> None:
+        super().__init__(message)
+        # Short cause for one-line output, e.g. "image pull timed out after 15m".
+        self.reason = reason or message
+        # The models.Instance that failed, so its machine can be excluded.
+        self.instance = instance
 
 
 class WorkloadFailed(JambuError):

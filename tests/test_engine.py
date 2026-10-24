@@ -531,3 +531,168 @@ def test_logs_fall_back_to_the_provider_when_the_watchdog_is_unreachable(engine)
         engine.read_logs(source="watchdog")
     with pytest.raises(ConfigError, match="unknown log source"):
         engine.read_logs(source="kernel")
+
+
+# -- a bad host costs one attempt, not the setup ------------------------------
+# Live: one RTX 3090 host could not reach Docker Hub (TLS handshake timeout,
+# Vast status FAILED), another sat in `loading` pulling a 10 GB image past the
+# startup timeout. Both were cleaned up, and both failed the whole setup.
+
+
+def _booting(write_config, monkeypatch, lifecycle=None, **overrides):
+    """An engine whose setup waits for real, minus the watchdog and the sleeps."""
+    config = write_config(
+        lifecycle=dict({"watchdog": {"enabled": False}}, **(lifecycle or {})), **overrides
+    )
+    lines: list[str] = []
+    engine = Engine(
+        config,
+        provider=FakeProvider(config, CredentialResolver(config.project_dir)),
+        echo=lines.append,
+    )
+    health_waits: list[float] = []
+
+    def _healthy(url, timeout, **_kwargs):
+        health_waits.append(timeout)
+
+    monkeypatch.setattr("jambu_gpu.core.engine.wait_for_healthy", _healthy)
+    monkeypatch.setattr("jambu_gpu.core.engine.time.sleep", lambda _seconds: None)
+    return engine, lines, health_waits
+
+
+def _events(engine, name):
+    return [r for r in engine.events.tail(limit=200) if r["event"] == name]
+
+
+def test_a_host_that_fails_to_boot_is_replaced_by_another_machine(write_config, monkeypatch):
+    engine, lines, _ = _booting(write_config, monkeypatch)
+    engine.provider.fail_first_hosts(1)
+
+    state = engine.setup()
+
+    assert state.state == InstanceState.READY.value
+    assert state.instance_id == "i-2" and state.instance.host_id == "m2"
+    assert list(engine.provider.instances) == ["i-2"], "never two instances alive"
+    assert ("destroy", "i-1") in engine.provider.calls
+    assert engine.provider.searches[-1] == ["m1"]
+    assert (
+        "! host m1 failed (Error response from daemon: Get "
+        '"https://registry-1.docker.io/v2/": net/http: TLS handshake timeout); '
+        "trying another machine (2/3)"
+    ) in lines
+    [failed] = _events(engine, "host_failed")
+    assert failed["instance_id"] == "i-1" and failed["host_id"] == "m1"
+    assert failed["attempt"] == 1 and "TLS handshake timeout" in failed["reason"]
+    destroyed = _events(engine, "instance_destroyed")
+    assert [(r["instance_id"], r["reason"]) for r in destroyed] == [("i-1", "host_failure")]
+    assert engine.store.load().instance_id == "i-2"
+
+
+def test_setup_gives_up_after_host_attempts_and_leaves_nothing_running(
+    write_config, monkeypatch
+):
+    from jambu_gpu.core.errors import HostFailure
+
+    engine, _, _ = _booting(write_config, monkeypatch)
+    engine.provider.fail_first_hosts(3)
+
+    with pytest.raises(HostFailure) as caught:
+        engine.setup()
+
+    message = str(caught.value)
+    assert "3 machines in a row failed to boot" in message
+    assert "compute.host_attempts" in message
+    assert "TLS handshake timeout" in message
+    assert engine.provider.instances == {}
+    assert engine.store.load().instance_id is None
+    assert engine.provider.rented_hosts == ["m1", "m2", "m3"]
+    assert [r["attempt"] for r in _events(engine, "host_failed")] == [1, 2, 3]
+    assert _events(engine, "setup_failed")
+
+
+def test_a_failed_machine_is_never_rented_again(write_config, monkeypatch):
+    engine, _, _ = _booting(write_config, monkeypatch, compute={"host_attempts": 4})
+    engine.provider.fail_first_hosts(3, how="vanish")
+
+    state = engine.setup()
+
+    assert engine.provider.rented_hosts == ["m1", "m2", "m3", "m4"]
+    assert state.instance.host_id == "m4"
+    assert engine.provider.searches[-1] == ["m1", "m2", "m3"]
+    assert list(engine.provider.instances) == [state.instance_id]
+
+
+def test_a_stuck_image_pull_times_out_on_boot_timeout_not_startup_timeout(
+    write_config, monkeypatch
+):
+    engine, lines, health_waits = _booting(
+        write_config, monkeypatch, health={"boot_timeout": "1s", "startup_timeout": "7m"}
+    )
+    engine.provider.fail_first_hosts(1, how="loading")
+
+    state = engine.setup()
+
+    assert state.instance.host_id == "m2"
+    assert (
+        "! host m1 failed (image pull timed out after 1s); trying another machine (2/3)"
+        in lines
+    )
+    # The model server's own wait is startup_timeout, untouched by the boot.
+    assert health_waits == [420.0]
+
+
+def test_a_model_server_that_dies_is_not_blamed_on_the_host(engine, monkeypatch):
+    from jambu_gpu.core.errors import HostFailure, RuntimeStartupError
+
+    monkeypatch.setattr(engine, "beacon", lambda _state: _DeadRuntimeWatchdog())
+    with pytest.raises(RuntimeStartupError) as caught:
+        engine.setup()
+
+    assert not isinstance(caught.value, HostFailure)
+    assert engine.provider.counter == 1, "the same config fails on every machine"
+    assert not _events(engine, "host_failed")
+    assert engine.provider.instances == {}
+
+
+def test_each_replacement_offer_is_held_to_the_budget(write_config, monkeypatch):
+    engine, _, _ = _booting(write_config, monkeypatch, budget={"max_hourly_cost_usd": 0.50})
+    engine.provider.offer_price = 0.90
+    engine.provider.host_prices = {"m1": 0.30}
+    engine.provider.fail_first_hosts(1)
+
+    with pytest.raises(BudgetExceededError):
+        engine.setup()
+
+    assert engine.provider.counter == 1
+    assert engine.provider.instances == {}
+    assert engine.store.load().instance_id is None
+
+
+def test_without_cleanup_a_failed_host_is_kept_and_not_retried(write_config, monkeypatch):
+    from jambu_gpu.core.errors import HostFailure
+
+    engine, _, _ = _booting(
+        write_config, monkeypatch, lifecycle={"cleanup_on_setup_failure": False}
+    )
+    engine.provider.fail_first_hosts(1)
+
+    with pytest.raises(HostFailure):
+        engine.setup()
+
+    assert engine.provider.counter == 1
+    assert list(engine.provider.instances) == ["i-1"]
+
+
+def test_the_remote_startup_grace_covers_the_boot_and_the_model_server(write_config):
+    import base64
+    import json
+    import re
+    import zlib
+
+    def grace(**health):
+        script = _engine(write_config, health=health)._build_onstart("t" * 43)
+        blob = re.search(r"echo (\S+) > /etc/jambu/watchdog.json.b64", script).group(1)
+        return json.loads(zlib.decompress(base64.b64decode(blob)))["startup_grace_s"]
+
+    assert grace() == 15 * 60 + 10 * 60 + 300  # boot_timeout 15m by default
+    assert grace(boot_timeout="20m", startup_timeout="5m") == 20 * 60 + 5 * 60 + 300

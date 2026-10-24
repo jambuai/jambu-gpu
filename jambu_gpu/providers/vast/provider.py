@@ -284,6 +284,7 @@ class VastProvider(GPUProvider):
                     hourly_cost_usd=offer.hourly_cost_usd,
                     label=spec.label,
                 )
+            instance.host_id = instance.host_id or offer.host_id
             instance.hourly_cost_usd = instance.hourly_cost_usd or offer.hourly_cost_usd
             return instance
 

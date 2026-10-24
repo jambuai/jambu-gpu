@@ -323,3 +323,46 @@ def test_an_oversized_boot_script_fails_before_any_api_call(provider):
     with pytest.raises(ProvisioningError, match="onstart limit"):
         provider.setup(spec)
     assert respx.calls.call_count == 0
+
+
+# -- a machine that failed to boot is never rented again ----------------------
+
+
+@respx.mock
+def test_setup_records_the_machine_and_skips_excluded_ones(provider):
+    failed_host = dict(OFFER, id=666, machine_id=4242, dph_total=0.20)
+    good_host = dict(OFFER, id=777, machine_id=77)
+    search = respx.put(f"{API_BASE}/search/asks/").mock(
+        return_value=httpx.Response(200, json={"offers": [failed_host, good_host]})
+    )
+    excluded = respx.put(f"{API_BASE}/asks/666/").mock(
+        return_value=httpx.Response(200, json={"success": True, "new_contract": 1})
+    )
+    create = respx.put(f"{API_BASE}/asks/777/").mock(
+        return_value=httpx.Response(200, json={"success": True, "new_contract": 19384723})
+    )
+    respx.get(f"{API_BASE}/instances/19384723/").mock(
+        return_value=httpx.Response(200, json={"instances": INSTANCE})
+    )
+
+    spec = provider.build_spec_preview(provider.config)
+    spec.exclude_hosts = ["4242"]
+    instance = provider.setup(spec)
+
+    assert instance.id == "19384723"
+    assert instance.host_id == "77"  # from the offer: this instance payload omits it
+    assert create.called and not excluded.called
+    sent = json.loads(search.calls[0].request.content)
+    assert sent["q"]["machine_id"] == {"notin": [4242]}
+    assert sent["q"]["inet_down"] == {"gte": 500.0}
+
+
+@respx.mock
+def test_an_instance_reports_its_machine(provider):
+    respx.get(f"{API_BASE}/instances/19384723/").mock(
+        return_value=httpx.Response(200, json={"instances": dict(INSTANCE, machine_id=77)})
+    )
+    from jambu_gpu.core.models import Instance
+
+    status = provider.status(Instance(id="19384723", provider="vast"))
+    assert status.instance.host_id == "77"

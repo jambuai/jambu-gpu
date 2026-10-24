@@ -94,6 +94,16 @@ class ComputeConfig(_Base):
     region: Optional[str] = None
     spot: bool = False
     image: Optional[str] = None
+    # Machines to try when one fails to boot (bad network, stuck image pull)
+    # before setup gives up. Each attempt rents a different host.
+    host_attempts: int = 3
+
+    @field_validator("host_attempts")
+    @classmethod
+    def _at_least_one(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("compute.host_attempts must be >= 1")
+        return v
 
 
 class ModelConfig(_Base):
@@ -213,10 +223,14 @@ class LifecycleConfig(_Base):
 
 class HealthConfig(_Base):
     interval: str = "60s"
+    # How long the machine may take to reach running (mostly the image pull).
+    boot_timeout: str = "15m"
+    # How long the model server may then take to answer its health check.
     startup_timeout: str = "10m"
     path: str = "/health"
 
     _v_interval = _duration("interval")
+    _v_boot = _duration("boot_timeout")
     _v_startup = _duration("startup_timeout")
 
 
@@ -286,6 +300,10 @@ class RuntimeConfig(_Base):
     @property
     def health_interval_s(self) -> float:
         return parse_duration(self.health.interval) or 15.0
+
+    @property
+    def boot_timeout_s(self) -> float:
+        return parse_duration(self.health.boot_timeout) or 900.0
 
     @property
     def startup_timeout_s(self) -> float:
@@ -555,6 +573,7 @@ gpu_runtime:
 
   health:
     interval: 60s
+    boot_timeout: 15m
     startup_timeout: 10m
 
   budget:
@@ -603,6 +622,7 @@ lifecycle:
 
 health:
   interval: 60s
+  boot_timeout: 15m
   startup_timeout: 10m
 
 budget:

@@ -180,3 +180,48 @@ def test_find_offers_applies_the_effective_floor(monkeypatch):
     offers = provider.find_offers(_spec("12.9"))
     assert [o.id for o in offers] == ["2"]
     assert seen["query"]["cuda_max_good"] == {"gte": 12.9}
+
+
+# -- hosts: the machine behind an offer, and machines not to rent again -------
+
+
+def test_offers_and_instances_carry_their_machine():
+    raw = {"id": 1, "machine_id": 4242, "gpu_name": "RTX 3090", "num_gpus": 1,
+           "gpu_ram": 24576, "disk_space": 100, "dph_total": 0.2}
+    assert mapper.map_offer(raw).host_id == "4242"
+    assert mapper.map_instance(dict(RUNNING, machine_id=4242), WANTED).host_id == "4242"
+    assert mapper.map_instance(RUNNING, WANTED).host_id is None
+
+
+def test_the_search_leaves_out_excluded_machines():
+    spec = _spec()
+    assert "machine_id" not in mapper.build_search_query(spec, VastOptions())
+    spec.exclude_hosts = ["4242", "77"]
+    query = mapper.build_search_query(spec, VastOptions())
+    assert query["machine_id"] == {"notin": [4242, 77]}
+
+
+def test_the_search_asks_for_a_fast_pipe_by_default():
+    """Live: a ~10 GB image pull on a slow host outlived the startup timeout."""
+    assert mapper.build_search_query(_spec(), VastOptions())["inet_down"] == {"gte": 500.0}
+
+
+def test_find_offers_drops_excluded_machines_even_if_the_server_returns_them(monkeypatch):
+    from jambu_gpu.providers.vast.provider import VastProvider
+
+    provider = VastProvider.__new__(VastProvider)
+    provider.options = VastOptions()
+
+    class _Client:
+        def search_offers(self, query):
+            return [
+                {"id": 1, "machine_id": 4242, "gpu_name": "A", "num_gpus": 1,
+                 "gpu_ram": 24564, "disk_space": 100, "dph_total": 0.2},
+                {"id": 2, "machine_id": 77, "gpu_name": "B", "num_gpus": 1,
+                 "gpu_ram": 24564, "disk_space": 100, "dph_total": 0.3},
+            ]
+
+    monkeypatch.setattr(VastProvider, "client", property(lambda self: _Client()))
+    spec = _spec()
+    spec.exclude_hosts = ["4242"]
+    assert [(o.id, o.host_id) for o in provider.find_offers(spec)] == [("2", "77")]

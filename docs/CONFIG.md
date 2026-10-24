@@ -64,7 +64,7 @@ for why this exists and `gpu profiles` / `gpu inspect-model
 | `runtype` | `ssh_direc ssh_proxy` | Vast container run mode. |
 | `verified_only` | `true` | Only rent verified machines. |
 | `min_reliability` | `0.95` | Minimum machine reliability score. |
-| `min_inet_down_mbps` | `100` | Minimum download bandwidth (model pulls are big). |
+| `min_inet_down_mbps` | `500` | Minimum download bandwidth. The vLLM image alone is ~10 GB and a slow pull is the commonest boot failure; most offers clear 500 at the same price. |
 | `min_cuda` | `12.1` | Floor for the host's `cuda_max_good` (the newest CUDA its driver runs). The search uses the higher of this and `compute.gpu.cuda_min`, and offers are re-checked client-side. |
 | `search_limit` | `24` | How many offers to consider. |
 | `order_by` / `order_dir` | `dph_total` / `asc` | Offer ranking — cheapest first. |
@@ -89,6 +89,7 @@ each number comes from.
 | `disk_gb` | `80` | Disk. Must fit the model weights plus the container. |
 | `region` | – | Comma-separated geolocations. |
 | `spot` | `false` | Use interruptible/bid capacity where supported. |
+| `host_attempts` | `3` | How many machines `setup` tries. A host that fails to boot (the provider reports it failed, it vanishes, or it is not running within `health.boot_timeout`) is destroyed, never rented again by this setup, and replaced from fresh offers, each held to the budget. A model server that dies once its container runs fails at once: the same config would fail on any machine. Needs `lifecycle.cleanup_on_setup_failure`; without it the first failed host is kept for inspection. |
 | `image` | – | Override the runtime's container image. vLLM's default is `vllm/vllm-openai:v0.32.0-cu129`. Pin a tag: `validate` warns on `latest` or an untagged image, because the CUDA it needs can change under you. |
 
 ---
@@ -202,7 +203,8 @@ judged by the sweep's own `--orphan-max-age` and `--stopped-ttl` flags. See
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `interval` | `60s` | Probe interval while waiting for the runtime. |
-| `startup_timeout` | `10m` | Give up if the model server never answers. Raise it for very large models. |
+| `boot_timeout` | `15m` | How long the machine may take to reach running, mostly the image pull. Past it the host counts as failed and `setup` tries another (`compute.host_attempts`). |
+| `startup_timeout` | `10m` | Once the machine runs, how long the model server may take to answer. Raise it for very large models. |
 | `path` | `/health` | Health path on the model endpoint. |
 
 A passing health check is **not** activity. A healthy but unused server still goes idle.

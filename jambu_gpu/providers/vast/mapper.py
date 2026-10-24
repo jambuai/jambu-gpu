@@ -81,6 +81,12 @@ def effective_min_cuda(spec: ComputeSpec, options: VastOptions) -> Optional[floa
     return max(known) if known else None
 
 
+def host_id(raw: dict[str, Any]) -> Optional[str]:
+    """Vast's ``machine_id``: the physical host behind an offer or instance."""
+    value = raw.get("machine_id")
+    return str(value) if value not in (None, "") else None
+
+
 def map_offer(raw: dict[str, Any]) -> Offer:
     return Offer(
         id=str(raw.get("id") or raw.get("ask_contract_id") or ""),
@@ -93,6 +99,7 @@ def map_offer(raw: dict[str, Any]) -> Offer:
         score=float(raw.get("score") or 0.0) if raw.get("score") is not None else None,
         # Highest CUDA the host driver runs; an image needing more dies at boot.
         cuda_max=_float_or_none(raw.get("cuda_max_good")),
+        host_id=host_id(raw),
         raw=raw,
     )
 
@@ -144,6 +151,7 @@ def map_instance(raw: dict[str, Any], wanted_ports: dict[int, str]) -> Instance:
         ssh_user="root",
         endpoints=extract_endpoints(raw, wanted_ports),
         label=str(raw.get("label") or ""),
+        host_id=host_id(raw),
         raw=raw,
     )
 
@@ -183,6 +191,10 @@ def build_search_query(
     # real (substring) filtering once results are back.
     if spec.max_hourly_cost_usd:
         query["dph_total"] = {"lte": float(spec.max_hourly_cost_usd)}
+    excluded = [int(h) if str(h).isdigit() else h for h in spec.exclude_hosts]
+    if excluded:
+        # Machines that already failed to boot this setup.
+        query["machine_id"] = {"notin": excluded}
     if spec.region:
         query["geolocation"] = {"in": [r.strip() for r in str(spec.region).split(",")]}
     if options.search_filters:
@@ -242,6 +254,8 @@ def offer_matches(offer: Offer, spec: ComputeSpec, min_cuda: Optional[float] = N
     if offer.disk_gb and offer.disk_gb + 0.5 < float(spec.disk_gb):
         return False
     if spec.max_hourly_cost_usd and offer.hourly_cost_usd > float(spec.max_hourly_cost_usd):
+        return False
+    if offer.host_id is not None and offer.host_id in spec.exclude_hosts:
         return False
     if spec.gpu.name_filter:
         if spec.gpu.name_filter.lower() not in offer.gpu_name.lower():

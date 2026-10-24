@@ -21,7 +21,9 @@ ONSTART_MAX_BYTES = 16384
 
 DEFAULT_SEARCH_LIMIT = 24
 DEFAULT_MIN_RELIABILITY = 0.95
-DEFAULT_MIN_INET_DOWN_MBPS = 100.0
+# Image pulls are ~10 GB; a slow pipe is the commonest boot failure. Most
+# offers clear 500 Mbps at the same price.
+DEFAULT_MIN_INET_DOWN_MBPS = 500.0
 DEFAULT_MIN_CUDA = 12.1
 
 

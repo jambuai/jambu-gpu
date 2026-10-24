@@ -14,7 +14,7 @@ gpu_runtime:
     profile: default
     # options:
     #   verified_only: true
-    #   min_inet_down_mbps: 200
+    #   min_inet_down_mbps: 1000
 
   compute:
     gpu:
@@ -22,6 +22,8 @@ gpu_runtime:
       count: 1
       # name_filter: RTX 4090
     disk_gb: 80
+    # Machines to try when one fails to boot (bad network, stuck image pull).
+    host_attempts: 3
     # Pin the image: its CUDA build sets the minimum host driver (cu129 = 12.9).
     # image: vllm/vllm-openai:v0.32.0-cu129
 
@@ -74,6 +76,7 @@ gpu_runtime:
 
   health:
     interval: 60s
+    boot_timeout: 15m
     startup_timeout: 10m
     path: /health
 

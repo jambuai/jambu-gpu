@@ -21,9 +21,11 @@ from . import policy
 from .beacon import WatchdogClient, WatchdogUnavailable
 from .config import RuntimeConfig
 from .credentials import CredentialResolver
+from .durations import format_duration
 from .errors import (
     BudgetExceededError,
     ConfigError,
+    HostFailure,
     JambuError,
     ProviderError,
     RuntimeStartupError,
@@ -400,7 +402,9 @@ class Engine:
             token=token,
             port=cfg.lifecycle.watchdog.port,
             interval_s=cfg.watchdog_interval_s,
-            startup_grace_s=cfg.startup_timeout_s + 300.0,
+            # The watchdog starts with the container, but the CLI's waits span
+            # the whole boot: never let the remote guard cut a legitimate one.
+            startup_grace_s=cfg.boot_timeout_s + cfg.startup_timeout_s + 300.0,
             policy=self.policy_config(),
             created_at=utc_now(),
             watchdog_spec=spec,
@@ -478,7 +482,6 @@ class Engine:
             # -- provision ------------------------------------------------
             token = watchdog_pkg.generate_token()
             onstart = self._build_onstart(token)
-            spec = self.build_spec(onstart)
 
             self.events.emit(
                 ev.PROVISION_REQUESTED,
@@ -492,83 +495,168 @@ class Engine:
                 f"> searching {self.provider.display_name} for {cfg.compute.gpu.count}x "
                 f">={cfg.compute.gpu.min_vram_gb}GB GPU, {cfg.compute.disk_gb}GB disk"
             )
-            estimated = self._check_budget(spec, allow_cost_override)
-            if estimated:
-                self.echo(f"  cheapest match: ${estimated:.3f}/h")
 
-            instance: Optional[Instance] = None
-            try:
-                instance = self.provider.setup(spec)
-                self.echo(
-                    f"+ instance {instance.id} created "
-                    f"({instance.gpu_count or cfg.compute.gpu.count}x "
-                    f"{instance.gpu_name or 'GPU'}"
-                    + (
-                        f", ${instance.hourly_cost_usd:.3f}/h)"
-                        if instance.hourly_cost_usd
-                        else ")"
+            # On a GPU marketplace a bad host is normal: one that cannot pull
+            # the image, or reach the registry at all, costs one attempt and
+            # its machine is not rented again by this setup. Retrying means
+            # destroying the bad one first, so it needs cleanup_on_setup_failure.
+            attempts = cfg.compute.host_attempts if cfg.lifecycle.cleanup_on_setup_failure else 1
+            excluded: list[str] = []
+            for attempt in range(1, attempts + 1):
+                spec = self.build_spec(onstart)
+                spec.exclude_hosts = list(excluded)
+                # Every new offer is held to the budget, not just the first.
+                estimated = self._check_budget(spec, allow_cost_override)
+                if estimated:
+                    self.echo(f"  cheapest match: ${estimated:.3f}/h")
+                try:
+                    return self._provision(state, spec, token, fingerprint, wait)
+                except HostFailure as exc:
+                    retry = attempt < attempts
+                    self._host_failed(state, exc, attempt, attempts, retry)
+                    if retry and self._discard_host(state, exc, excluded):
+                        continue
+                    if retry or attempts == 1:
+                        self._fail_setup(state, exc)
+                        raise
+                    final = HostFailure(
+                        f"{attempts} machines in a row failed to boot, giving up "
+                        f"(compute.host_attempts). Last: {exc}",
+                        reason=exc.reason,
+                        instance=exc.instance,
                     )
-                )
+                    self._fail_setup(state, final)
+                    raise final from exc
+                except JambuError as exc:
+                    self._fail_setup(state, exc)
+                    raise
+            raise AssertionError("unreachable: the last attempt returns or raises")
 
-                state.provider = self.provider.name
-                state.instance_id = instance.id
-                state.instance = instance
-                state.fingerprint = fingerprint
-                state.model_id = cfg.model.id
-                state.created_at = instance.created_at or utc_now()
-                state.last_activity = utc_now()
-                state.starting = True
-                state.state = InstanceState.PROVISIONING.value
-                state.hourly_cost_usd = instance.hourly_cost_usd
-                state.locked = False
-                state.locked_until = None
-                # Billing starts the moment the provider creates the instance,
-                # not at the next reconcile - start the clock now so a long
-                # provisioning/startup wait is never undercounted.
-                state.billed_seconds = 0.0
-                state.running_since = state.created_at
-                state.mark_session_start(state.created_at)
-                state.watchdog = WatchdogInfo(
-                    installed=cfg.lifecycle.watchdog.enabled,
-                    token=token,
-                    port=cfg.lifecycle.watchdog.port,
-                    url=instance.endpoint_url("watchdog"),
-                )
-                # Persist before the long wait: a crash here must still leave a
-                # destroyable record (spec criterion 4).
-                self.store.save(state)
+    def _provision(
+        self,
+        state: RuntimeState,
+        spec: ComputeSpec,
+        token: str,
+        fingerprint: str,
+        wait: bool,
+    ) -> RuntimeState:
+        cfg = self.config
+        instance = self.provider.setup(spec)
+        self.echo(
+            f"+ instance {instance.id} created "
+            f"({instance.gpu_count or cfg.compute.gpu.count}x "
+            f"{instance.gpu_name or 'GPU'}"
+            + (
+                f", ${instance.hourly_cost_usd:.3f}/h)"
+                if instance.hourly_cost_usd
+                else ")"
+            )
+        )
+
+        state.provider = self.provider.name
+        state.instance_id = instance.id
+        state.instance = instance
+        state.fingerprint = fingerprint
+        state.model_id = cfg.model.id
+        state.created_at = instance.created_at or utc_now()
+        state.last_activity = utc_now()
+        state.starting = True
+        state.state = InstanceState.PROVISIONING.value
+        state.hourly_cost_usd = instance.hourly_cost_usd
+        state.locked = False
+        state.locked_until = None
+        # Billing starts the moment the provider creates the instance,
+        # not at the next reconcile - start the clock now so a long
+        # provisioning/startup wait is never undercounted.
+        state.billed_seconds = 0.0
+        state.running_since = state.created_at
+        state.mark_session_start(state.created_at)
+        state.watchdog = WatchdogInfo(
+            installed=cfg.lifecycle.watchdog.enabled,
+            token=token,
+            port=cfg.lifecycle.watchdog.port,
+            url=instance.endpoint_url("watchdog"),
+        )
+        # Persist before the long wait: a crash here must still leave a
+        # destroyable record (spec criterion 4).
+        self.store.save(state)
+        self.events.emit(
+            ev.INSTANCE_CREATED,
+            instance_id=instance.id,
+            host_id=instance.host_id,
+            gpu_name=instance.gpu_name,
+            gpu_count=instance.gpu_count,
+            hourly_cost_usd=instance.hourly_cost_usd,
+        )
+
+        if not wait:
+            return state
+        return self.ensure_ready(state=state)
+
+    def _host_failed(
+        self,
+        state: RuntimeState,
+        exc: HostFailure,
+        attempt: int,
+        attempts: int,
+        retry: bool,
+    ) -> None:
+        instance = exc.instance
+        host_id = instance.host_id if instance else None
+        instance_id = instance.id if instance else state.instance_id
+        self.events.emit(
+            ev.HOST_FAILED,
+            instance_id=instance_id,
+            host_id=host_id,
+            reason=exc.reason,
+            error=str(exc),
+            attempt=attempt,
+            host_attempts=attempts,
+        )
+        line = f"! host {host_id or instance_id} failed ({exc.reason})"
+        if retry:
+            line += f"; trying another machine ({attempt + 1}/{attempts})"
+        self.echo(line)
+
+    def _discard_host(
+        self, state: RuntimeState, exc: HostFailure, excluded: list[str]
+    ) -> bool:
+        """Destroy a machine that failed to boot so another can be rented.
+
+        False when it could not be destroyed: renting another would leave two
+        instances billing, so setup stops there.
+        """
+        instance = exc.instance
+        try:
+            if state.instance_id:
+                self._terminate(state, action=policy.ACTION_DESTROY, reason="host_failure")
+            elif instance is not None:
+                # Vanished: already out of the state. Destroying is idempotent
+                # and makes sure it is really gone before renting another.
+                self.provider.destroy(instance)
+        except JambuError as cleanup_exc:
+            self.echo(f"! could not destroy the failed instance: {cleanup_exc}")
+            return False
+        self.store.save(state)
+        host_id = instance.host_id if instance else None
+        if host_id:
+            excluded.append(host_id)
+        return True
+
+    def _fail_setup(self, state: RuntimeState, exc: JambuError) -> None:
+        cfg = self.config
+        self.events.emit(ev.SETUP_FAILED, error=str(exc), error_type=type(exc).__name__)
+        if cfg.lifecycle.cleanup_on_setup_failure and state.instance_id:
+            self.echo(f"! setup failed, cleaning up instance {state.instance_id}")
+            try:
+                self._terminate(state, action=policy.ACTION_DESTROY, reason="setup_failure")
+                self.events.emit(ev.CLEANUP_PERFORMED, instance_id=state.instance_id)
+            except JambuError as cleanup_exc:
                 self.events.emit(
-                    ev.INSTANCE_CREATED,
-                    instance_id=instance.id,
-                    gpu_name=instance.gpu_name,
-                    gpu_count=instance.gpu_count,
-                    hourly_cost_usd=instance.hourly_cost_usd,
+                    ev.PROVIDER_ERROR, operation="cleanup", error=str(cleanup_exc)
                 )
-
-                if not wait:
-                    return state
-                return self.ensure_ready(state=state)
-
-            except JambuError as exc:
-                self.events.emit(
-                    ev.SETUP_FAILED, error=str(exc), error_type=type(exc).__name__
-                )
-                if cfg.lifecycle.cleanup_on_setup_failure and state.instance_id:
-                    self.echo(f"! setup failed, cleaning up instance {state.instance_id}")
-                    try:
-                        self._terminate(
-                            state, action=policy.ACTION_DESTROY, reason="setup_failure"
-                        )
-                        self.events.emit(
-                            ev.CLEANUP_PERFORMED, instance_id=state.instance_id
-                        )
-                    except JambuError as cleanup_exc:
-                        self.events.emit(
-                            ev.PROVIDER_ERROR, operation="cleanup", error=str(cleanup_exc)
-                        )
-                        self.echo(f"! cleanup failed: {cleanup_exc}")
-                self.store.save(state)
-                raise
+                self.echo(f"! cleanup failed: {cleanup_exc}")
+        self.store.save(state)
 
     # ------------------------------------------------------------------
     # readiness
@@ -620,22 +708,32 @@ class Engine:
             return state
 
     def _wait_running(self, state: RuntimeState) -> Instance:
+        """Wait for the machine itself (mostly the image pull), up to
+        health.boot_timeout. The container has not run yet, so every failure
+        here is the host's.
+        """
         instance = state.instance
         assert instance is not None
-        deadline = time.time() + self.config.startup_timeout_s
+        boot_timeout = self.config.boot_timeout_s
+        deadline = time.time() + boot_timeout
         announced = False
         while time.time() < deadline:
             status = self.provider.status(instance)
             if not status.exists:
                 state.clear_instance()
                 self.store.save(state)
-                raise RuntimeStartupError(
-                    f"instance {instance.id} vanished at the provider while starting"
+                raise HostFailure(
+                    f"instance {instance.id} vanished at the provider while starting",
+                    reason="vanished while booting",
+                    instance=instance,
                 )
             current = status.instance or instance
             if status.state is InstanceState.FAILED:
-                raise RuntimeStartupError(
-                    f"instance {instance.id} failed: {status.message or 'no detail'}"
+                detail = (status.message or "").strip() or "no detail"
+                raise HostFailure(
+                    f"instance {instance.id} failed: {detail}",
+                    reason=detail.splitlines()[0][:160],
+                    instance=current,
                 )
             ready_ports = self._ports()
             have_ports = all(
@@ -652,9 +750,11 @@ class Engine:
                 announced = True
                 self.echo("  waiting for the machine to come up ...")
             time.sleep(6)
-        raise RuntimeStartupError(
+        raise HostFailure(
             f"instance {instance.id} was not running after "
-            f"{int(self.config.startup_timeout_s)}s"
+            f"{format_duration(boot_timeout)} (health.boot_timeout)",
+            reason=f"image pull timed out after {format_duration(boot_timeout)}",
+            instance=instance,
         )
 
     def _endpoint_names(self) -> list[str]:

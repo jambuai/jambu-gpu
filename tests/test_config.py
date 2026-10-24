@@ -362,3 +362,29 @@ def test_the_example_manifest_loads_with_the_new_fields():
     loaded = load_config(example)
     assert loaded.stopped_ttl_s == 24 * 3600
     assert loaded.lifecycle.traffic_counts_as_activity is True
+    assert loaded.boot_timeout_s == 15 * 60
+    assert loaded.compute.host_attempts == 3
+
+
+def test_boot_and_startup_timeouts_are_separate(write_config):
+    defaults = write_config()
+    assert defaults.boot_timeout_s == 15 * 60
+    assert defaults.startup_timeout_s == 10 * 60
+    custom = write_config(health={"boot_timeout": "30m", "startup_timeout": "25m"})
+    assert (custom.boot_timeout_s, custom.startup_timeout_s) == (1800.0, 1500.0)
+    with pytest.raises(ConfigError, match="boot_timeout"):
+        write_config(health={"boot_timeout": "soon"})
+
+
+def test_host_attempts_must_allow_at_least_one_machine(write_config):
+    assert write_config().compute.host_attempts == 3
+    assert write_config(compute={"host_attempts": 1}).compute.host_attempts == 1
+    with pytest.raises(ConfigError, match="host_attempts"):
+        write_config(compute={"host_attempts": 0})
+
+
+def test_host_attempts_and_boot_timeout_keep_the_instance_compatible(write_config):
+    """Retry tuning is not part of the runtime: no `--recreate` for it."""
+    base = write_config().fingerprint()
+    assert write_config(compute={"host_attempts": 5}).fingerprint() == base
+    assert write_config(health={"boot_timeout": "40m"}).fingerprint() == base

@@ -34,6 +34,8 @@ STATE_RECONCILED = "state_reconciled"
 SETUP_FAILED = "setup_failed"
 CLEANUP_PERFORMED = "cleanup_performed"
 BUDGET_REJECTED = "budget_rejected"
+# A machine failed to boot; setup rents another one.
+HOST_FAILED = "host_failed"
 
 
 class EventLog:

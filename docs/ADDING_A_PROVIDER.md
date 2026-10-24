@@ -68,6 +68,12 @@ and raise only the normalized errors from `core/errors.py`:
 `ProviderTimeoutError`, `UnsupportedCapabilityError`. CLI behaviour must be
 identical across providers.
 
+Report a machine that will not boot as `failed` rather than leaving it in
+`starting`: `setup` then destroys it at once and rents another machine
+(`compute.host_attempts`). Set `Offer.host_id` and `Instance.host_id` to the
+physical machine when the API exposes it, and leave out offers whose `host_id` is
+in `ComputeSpec.exclude_hosts`, or `setup` may rent the same bad machine again.
+
 ## 4. Supply the watchdog actions
 
 The lifecycle *policy* is the core's; the adapter contributes only the two calls
