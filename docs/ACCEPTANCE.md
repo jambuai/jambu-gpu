@@ -23,6 +23,27 @@ Eighteen guarantees, mapped to the code and the test that holds each one.
 | 17 | The CLI guard never stops a serving endpoint it cannot see | `Engine._idle_blind`: with the watchdog enabled and installed but unreachable, `guard_tick` evaluates without `idle_timeout` and records `idle_skipped`; `max_lifetime`, budget and `stopped_ttl` still apply | `test_engine_sessions.py::test_guard_leaves_idle_to_an_unreachable_watchdog`, `::test_max_lifetime_still_applies_when_the_watchdog_is_unreachable` |
 | 18 | A fresh stop or a short API outage never costs the disk | `RuntimeState.mark_stopped` restarts `stopped_since` on evidence the instance ran since; the watchdog escalates a failing stop to destroy only after `escalate_after_s` (30m) of continuous failure and resets on renewed use | `test_engine_sessions.py::test_a_stale_stopped_since_does_not_destroy_a_fresh_stop`, `test_watchdog.py::test_an_api_blip_does_not_destroy_the_disk`, `::test_failures_reset_when_the_instance_is_back_in_use` |
 
+## Validated on real hardware
+
+On 2026-10-24 the lifecycle ran end to end on Vast.ai (RTX 3090, Qwen2.5-0.5B, `idle_timeout: 4m`, `stopped_ttl: 5m`), for about $1.20 in total across every attempt:
+
+| What was checked | What happened |
+| --- | --- |
+| Traffic is activity | 10 requests sent straight to the endpoint over 7.5 minutes, none through `gpu run`. The machine stayed up past the 4-minute idle timeout. |
+| Idle stops | 269 s after the last request the watchdog stopped its own machine (`idle_timeout`). Vast showed it `exited`. |
+| A restart is guarded | `gpu run` restarted it. The watchdog logged `session_started` with `terminated: false` and measured `max_lifetime` from the restart. After the workload it stopped the machine again on its own. |
+| Stopped storage is reclaimed | 334 s after the stop, `gpu guard` destroyed it (`stopped_ttl`). |
+| Failed setups leave nothing | An image built for a newer CUDA, a model server that died at import, a host whose network dropped the weights download, a 30-minute image pull, and a Ctrl-C each ended with the instance destroyed. |
+| Bad hosts are skipped | Hosts that could not pull the image were destroyed, excluded and replaced, with never two instances alive at once. |
+
+The run also found what unit tests could not, and each of these is fixed and covered by a test:
+- the boot script was over Vast's 16 KB onstart limit;
+- `latest` had moved to CUDA 13;
+- the `-cu129` image variant could not load torchcodec;
+- a 15-minute boot timeout was too short for a 12 GB pull;
+- Ctrl-C did not clean up;
+- a fresh contract was reported `READY`.
+
 ## The MVP command surface
 
 `jambu.yaml` schema, CLI, provider contract, provider registry, Vast.ai adapter,
