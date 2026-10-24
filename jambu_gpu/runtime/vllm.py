@@ -195,9 +195,15 @@ class VllmRuntime(ModelRuntime):
 
     def start_command(self) -> str:
         args = " ".join(shlex.quote(a) for a in self.server_args())
+        # The interpreter that can import vllm: images that put a Python shim
+        # first on PATH (vastai/vllm) keep vllm under /usr/bin/python3.
+        find_python = (
+            "PY=python3; for p in /usr/bin/python3 python3 python; do "
+            "$p -c 'import vllm' 2>/dev/null && PY=$p && break; done"
+        )
         return (
-            f"mkdir -p $(dirname {LOG_PATH}) && "
-            f"nohup python3 -m vllm.entrypoints.openai.api_server {args} "
+            f"mkdir -p $(dirname {LOG_PATH}) && {find_python}; "
+            f"nohup $PY -m vllm.entrypoints.openai.api_server {args} "
             f">> {LOG_PATH} 2>&1 & echo $! > {PID_PATH}"
         )
 

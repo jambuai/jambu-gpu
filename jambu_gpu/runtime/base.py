@@ -21,7 +21,8 @@ ENDPOINT_NAME = "model"
 # `-cu129` -> 12.9, `cu130` -> 13.0, `-cuda12.1-` -> 12.1: the CUDA toolkit an
 # image tag was built for.
 _CU_TAG = re.compile(r"(?:^|[-_.])cu(\d{2})(\d)(?![0-9])")
-_CUDA_TAG = re.compile(r"cuda(\d+)\.(\d+)")
+# `cuda12.1` (pytorch) and `cuda-13.0` (vastai/vllm) spellings.
+_CUDA_TAG = re.compile(r"cuda[-_]?(\d+)\.(\d+)")
 
 
 def image_tag(image: str) -> str:

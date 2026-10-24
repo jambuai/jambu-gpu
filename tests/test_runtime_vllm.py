@@ -234,3 +234,17 @@ def test_a_runtime_without_liveness_declares_nothing(write_config):
     assert runtime.runtime_pid_path() is None
     assert runtime.runtime_log_path() is None
     assert runtime.required_cuda() == 12.1  # pytorch/...-cuda12.1-...
+
+
+def test_vast_published_vllm_images_carry_their_cuda(write_config):
+    for image, cuda in (("vastai/vllm:v0.32.0-cuda-13.0", 13.0), ("vastai/vllm:v0.29.0-cuda-12.9", 12.9)):
+        assert VllmRuntime(write_config(compute={"image": image})).required_cuda() == cuda
+
+
+def test_the_start_command_finds_the_python_that_has_vllm(config, tmp_path):
+    """vastai/vllm puts a shim first on PATH; vllm lives under /usr/bin/python3."""
+    import subprocess
+
+    command = VllmRuntime(config).start_command()
+    assert "import vllm" in command and "nohup $PY -m vllm.entrypoints" in command
+    subprocess.run(["bash", "-n", "-c", command], check=True)
