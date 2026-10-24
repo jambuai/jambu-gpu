@@ -36,12 +36,18 @@ def _parse_dotenv(path: Path) -> dict[str, str]:
 class CredentialResolver:
     """Looks up named credentials without ever writing them to disk."""
 
-    def __init__(self, project_dir: Optional[Path] = None, profile: str = "default") -> None:
+    def __init__(
+        self,
+        project_dir: Optional[Path] = None,
+        profile: str = "default",
+        extra_sources: Optional[list[tuple[str, Path]]] = None,
+    ) -> None:
         self.project_dir = Path(project_dir or Path.cwd())
         self.profile = profile
         self.sources: list[tuple[str, Path]] = [
             ("project .env", self.project_dir / ".env"),
             ("user credentials", Path.home() / ".jambu" / "credentials"),
+            *(extra_sources or []),
         ]
 
     def get(self, name: str) -> Optional[str]:
@@ -56,6 +62,18 @@ class CredentialResolver:
                 return scoped
             if values.get(name):
                 return values[name]
+        return None
+
+    def file_source(self, name: str) -> Optional[str]:
+        """Which file (not the environment) provides ``name``, if any.
+
+        A systemd user unit does not inherit the shell's environment, so
+        anything scheduled must find its credentials in one of these files.
+        """
+        for label, path in self.sources:
+            values = _parse_dotenv(path)
+            if values.get(f"{name}__{self.profile}") or values.get(name):
+                return f"{label} ({path})"
         return None
 
     def require(self, name: str) -> str:

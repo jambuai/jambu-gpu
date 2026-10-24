@@ -146,6 +146,8 @@ def _guard(decision: dict, payload: dict) -> Text:
                 f"ok ({reason}); auto-stop in {format_duration(remaining)} if idle",
                 style="green",
             )
+        if (decision.get("detail") or {}).get("idle_skipped"):
+            return Text(f"ok ({reason}); idle left to the unreachable watchdog", style="yellow")
         return Text(f"ok ({reason})", style="green")
     return Text(f"{action} pending: {reason}", style="bold yellow")
 

@@ -27,6 +27,14 @@ BASE_CONFIG = {
 }
 
 
+@pytest.fixture(autouse=True)
+def jambu_home(tmp_path, monkeypatch):
+    """Keep the project registry and sweep state out of the real ~/.jambu."""
+    home = tmp_path / "jambu-home"
+    monkeypatch.setenv("JAMBU_HOME", str(home))
+    return home
+
+
 def _deep_merge(base: dict, extra: dict) -> dict:
     out = dict(base)
     for key, value in extra.items():

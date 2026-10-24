@@ -23,6 +23,11 @@ def make_engine(config):
     return Engine(config, provider=provider)
 
 
+# Without a watchdog the CLI guard owns the idle rule; with one it defers to it
+# (see test_engine_sessions.py::test_guard_leaves_idle_to_an_unreachable_watchdog).
+LOCAL_IDLE = {"idle_timeout": "1m", "watchdog": {"enabled": False}}
+
+
 # -- idempotency (spec section 23) ------------------------------------------
 
 
@@ -140,7 +145,7 @@ def test_cost_override_provisions_anyway(write_config):
 
 
 def test_guard_stops_an_idle_unlocked_instance_and_records_the_reason(write_config):
-    config = write_config(lifecycle={"idle_timeout": "1m"})
+    config = write_config(lifecycle=LOCAL_IDLE)
     engine = make_engine(config)
     state = engine.setup(wait=False)
 
@@ -160,7 +165,7 @@ def test_guard_stops_an_idle_unlocked_instance_and_records_the_reason(write_conf
 
 
 def test_guard_respects_an_active_lock(write_config):
-    config = write_config(lifecycle={"idle_timeout": "1m"})
+    config = write_config(lifecycle=LOCAL_IDLE)
     engine = make_engine(config)
     engine.setup(wait=False)
     with engine.store.transaction() as stored:
@@ -172,7 +177,7 @@ def test_guard_respects_an_active_lock(write_config):
 
 
 def test_expired_lock_stops_protecting(write_config):
-    config = write_config(lifecycle={"idle_timeout": "1m"})
+    config = write_config(lifecycle=LOCAL_IDLE)
     engine = make_engine(config)
     engine.setup(wait=False)
     with engine.store.transaction() as stored:
@@ -191,7 +196,7 @@ def test_indefinite_lock_is_refused_by_default(engine):
 
 
 def test_dry_run_guard_changes_nothing(write_config):
-    config = write_config(lifecycle={"idle_timeout": "1m"})
+    config = write_config(lifecycle=LOCAL_IDLE)
     engine = make_engine(config)
     engine.setup(wait=False)
     with engine.store.transaction() as stored:

@@ -7,7 +7,7 @@ from typing import List
 import typer
 
 from ..core.errors import JambuError, WorkloadFailed
-from ._common import get_context, handle, print_json
+from ._common import get_context, handle, print_json, register_project
 
 
 def run_command(
@@ -25,6 +25,7 @@ def run_command(
     context = get_context(ctx)
     try:
         engine = context.engine()
+        register_project(context)  # `run` provisions when nothing is up
         engine.run(list(command), label=label)
     except WorkloadFailed as exc:
         if context.json:

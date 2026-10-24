@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterable, Iterator, Optional
 
 from .errors import StateError
 from .models import Instance, InstanceState
@@ -187,10 +187,26 @@ class RuntimeState:
             self.billed_seconds += max(0.0, now - self.running_since)
             self.running_since = None
 
-    def mark_stopped(self, now: Optional[float] = None) -> None:
-        """Record that the instance is (still) stopped; keeps the earliest time."""
+    def mark_stopped(self, now: Optional[float] = None, ran_at: Iterable[Optional[float]] = ()) -> None:
+        """Record that the instance is (still) stopped; keeps the earliest time.
+
+        ``ran_at`` are times the instance was evidently running. One newer than
+        ``stopped_since`` means it ran (and stopped again) while this CLI was
+        not looking, so the stop clock restarts instead of destroying a fresh stop.
+        """
+        now = now if now is not None else utc_now()
         if self.stopped_since is None:
-            self.stopped_since = now if now is not None else utc_now()
+            self.stopped_since = now
+            return
+        evidence = [
+            self.session_started_at,
+            self.last_activity,
+            self.watchdog.last_contact,
+            *ran_at,
+        ]
+        # The state file keeps whole seconds; a sub-second lead is rounding.
+        if any(ts is not None and ts > self.stopped_since + 1.0 for ts in evidence):
+            self.stopped_since = now
 
     def mark_session_start(self, now: Optional[float] = None) -> None:
         self.session_started_at = now if now is not None else utc_now()

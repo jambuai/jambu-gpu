@@ -22,9 +22,9 @@ Operator reference. The project front page is the [README](../README.md). Field-
 | `gpu logs` | Provider-side container logs |
 | `gpu events` | Structured lifecycle event log |
 | `gpu guard` | Evaluate and enforce the lifecycle rule from cron or CI |
-| `gpu ls` | Every jambu instance in the provider account, and whether this project tracks it |
-| `gpu sweep` | Account-wide safety net: report (or `--apply`) stops and destroys of instances whose guard failed |
-| `gpu sweep --install-timer` | Write a systemd user timer running `sweep --apply` and this project's `guard` |
+| `gpu ls` | Every jambu instance in the provider account, and which registered project owns it |
+| `gpu sweep` | Guard every registered project by its own rules, then report (or `--apply`) stops and destroys of orphans |
+| `gpu sweep --install-timer` | Write a systemd user timer running `sweep --apply`, and register this project |
 | `gpu endpoint` | Print the model endpoint URL |
 
 Every command accepts `--json` and `--config PATH`.
@@ -103,30 +103,37 @@ gpu ls
 
 ```
 Vast.ai instances
- ID        LABEL                          STATE    GPU          $/H     AGE    TRACKED
- 31337001  jambu-Qwythos-9B-v2-3fa2c1     READY    1x RTX 4090  $0.350  7h30m  yes
- 31337002  jambu-Llama-3.1-8B-9b01de      STOPPED  1x RTX 4090  $0.350  1d6h   no
+ ID        LABEL                          STATE    GPU          $/H     AGE    PROJECT
+ 31337001  jambu-Qwythos-9B-v2-3fa2c1     READY    1x RTX 4090  $0.350  7h30m  /home/me/agent/jambu.yaml
+ 31337002  jambu-Llama-3.1-8B-9b01de      STOPPED  1x RTX 4090  $0.350  1d6h   orphan
 ```
 
-`gpu sweep` applies two rules:
+### Every project by its own rules
 
-| Instance | Rule | Action |
+`gpu setup` (and `gpu run`, which can provision) registers the project's absolute config path in `~/.jambu/projects.json` (`$JAMBU_HOME` overrides `~/.jambu`). `gpu sweep` then works in two steps:
+
+1. **Tracked instances.** For every registered project whose config still loads, it runs that project's own `gpu guard`: its own `jambu.yaml` and `.jambu/state.json`, so its own `max_lifetime`, lock, session start, `stopped_ttl` and budget. The project's events land in its own log. A registered project whose config file is gone is dropped from the registry. The project in the current directory, or the one given with `--config`, is guarded too for that run.
+2. **Orphans.** An instance no project tracks has no known policy and nobody knows whether it is in use, so the rules are blunt but never destroy a running machine:
+
+| Orphan | Rule | Action |
 | --- | --- | --- |
-| running | older than `max_lifetime` + 30m: the watchdog evidently failed | `stop` when this project tracks it, `destroy` otherwise |
-| stopped | first seen stopped more than `stopped_ttl` ago | `destroy` |
+| running | running longer than `--orphan-max-age` (default `24h`, from the provider's creation time) | `stop`, never `destroy` |
+| stopped | first seen stopped by the sweep more than `--stopped-ttl` ago (default `24h`) | `destroy` |
+
+An instance whose project exists but could not be guarded this run (the config no longer parses, another `gpu` command holds the lock, an API error) still counts as tracked: the sweep reports the error and exits 1, but never treats that instance as an orphan.
 
 It is a dry run until you pass `--apply`:
 
 ```
 $ gpu sweep
-> sweeping Vast.ai: running > 6h30m, stopped > 1d (dry run)
-- would destroy 31337002 (jambu-Llama-3.1-8B-9b01de): stopped_ttl, stopped for 1d2h
+> guarding 1 project(s) (dry run)
+= /home/me/agent/jambu.yaml: 31337001 ok (within_policy)
+> sweeping Vast.ai for orphans: running > 1d is stopped, stopped > 1d is destroyed (dry run)
+- would destroy orphan 31337002 (jambu-Llama-3.1-8B-9b01de): stopped_ttl, stopped for 1d2h
 ! 1 action(s) pending; re-run with --apply
 ```
 
-Thresholds come from the nearest `jambu.yaml`. Without one, `--max-lifetime` and `--stopped-ttl` default to `6h` and `24h`. They apply to every jambu instance in the account, so sweep from the project with the longest `max_lifetime`, or pass the flags. Credentials resolve the usual way: the environment, `.env` in the working directory, then `~/.jambu/credentials`.
-
-Providers do not report when an instance stopped, so the sweep keeps the time it first saw each one stopped in `~/.jambu/sweep.json` (`$JAMBU_HOME` overrides `~/.jambu`). An entry goes away when the instance runs again or disappears. `stopped_ttl` therefore counts from the first sweep that saw the instance stopped. Every action is recorded as a `sweep_action` event with its reason, in `~/.jambu/logs/events.jsonl` and in the project's event log when there is one. A local lock on the tracked instance is respected.
+Providers do not report when an instance stopped, so the sweep keeps the time it first saw each orphan stopped in `~/.jambu/sweep.json`. An entry goes away when the instance runs again, disappears, or is tracked by a project. `stopped_ttl` for an orphan therefore counts from the first sweep that saw it stopped, never from a project's state. Every orphan action is recorded as a `sweep_action` event with its reason in `~/.jambu/logs/events.jsonl`. Credentials for the orphan step resolve the usual way (the environment, `.env` in the working directory, `~/.jambu/credentials`), then from the `.env` of registered projects.
 
 ### Run it on a timer
 
@@ -135,7 +142,9 @@ gpu sweep --install-timer            # every 5m; --every 15m to change
 systemctl --user daemon-reload && systemctl --user enable --now jambu-gpu-sweep.timer
 ```
 
-`--install-timer` writes `~/.config/systemd/user/jambu-gpu-sweep.service` and `.timer`. The service runs `python -m jambu_gpu sweep --apply` with the interpreter that installed it. When you run it inside a project, it also runs `gpu --config <abs path> guard` for that project. Installing from a second project adds its guard line and keeps the first. A user timer needs no root, but it stops at logout unless lingering is on (`loginctl enable-linger $USER`). Put the API key in `~/.jambu/credentials` or the project `.env`, because the unit does not inherit your shell's environment.
+`--install-timer` writes `~/.config/systemd/user/jambu-gpu-sweep.service` and `.timer`, and registers the current project if there is one. The service is a single `ExecStart=<python> -m jambu_gpu sweep --apply` with the interpreter that installed it, run from `~`: which projects get guarded comes from the registry, not from the working directory, so installing from a second project changes nothing in the unit. The oneshot has a 10 minute start timeout, a failing sweep shows as a failed unit, and `JAMBU_HOME` is passed through when it is set. A unit written by an older version, with one `guard` line per project, is rewritten and those projects are registered.
+
+A user unit does not inherit your shell's environment. `--install-timer` therefore refuses unless the provider key is in a file: the project `.env` or `~/.jambu/credentials`. A key that is only exported in your shell is not enough. A user timer needs no root, but it stops at logout unless lingering is on (`loginctl enable-linger $USER`).
 
 ```bash
 gpu sweep --uninstall-timer

@@ -115,3 +115,17 @@ def fmt_money(value: Optional[float], suffix: str = "") -> Optional[str]:
     if value is None:
         return None
     return f"${value:.3f}{suffix}"
+
+
+def register_project(context: Context) -> None:
+    """Put this project in $JAMBU_HOME/projects.json so `gpu sweep` guards it.
+
+    Done before provisioning: a setup that dies halfway must still leave an
+    instance the sweep judges by this project's policy, not as an orphan.
+    """
+    from ..core.sweep import register_project as _register
+
+    try:
+        _register(context.config())
+    except OSError as exc:
+        context.echo(f"! could not register the project for `gpu sweep`: {exc}")

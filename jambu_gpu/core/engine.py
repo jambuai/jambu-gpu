@@ -70,6 +70,9 @@ class Engine:
         self.runtime: ModelRuntime = runtime_registry.get(config)
         self.store = StateStore(config.state_dir)
         self.events = EventLog(self.store.logs_dir).bind(provider=self.provider.name)
+        # Whether the last reconcile read the watchdog's state. Traffic activity
+        # lives only on the instance, so without it the local idle clock lies.
+        self.watchdog_read = False
 
     # ------------------------------------------------------------------
     # policy plumbing
@@ -106,6 +109,20 @@ class Engine:
             provider_state=state.state,
             session_started_at=state.session_started_at,
             stopped_since=state.stopped_since,
+        )
+
+    def _idle_blind(self, state: RuntimeState) -> bool:
+        """True when only the unreachable watchdog knows about recent activity.
+
+        Inference traffic is counted on the instance; the local last_activity
+        never sees it. Judging idleness from it would stop a serving endpoint,
+        so the CLI leaves the idle rule to the watchdog. max_lifetime, the
+        budget and stopped_ttl still apply.
+        """
+        return (
+            self.config.lifecycle.watchdog.enabled
+            and state.watchdog.installed
+            and not self.watchdog_read
         )
 
     def beacon(self, state: RuntimeState) -> Optional[WatchdogClient]:
@@ -190,6 +207,7 @@ class Engine:
         return self._reconcile(state)
 
     def _reconcile(self, state: RuntimeState) -> RuntimeState:
+        self.watchdog_read = False
         if not state.instance_id:
             state.state = InstanceState.DESTROYED.value
             return state
@@ -234,6 +252,7 @@ class Engine:
         if client is not None:
             remote = client.try_state()
         if remote:
+            self.watchdog_read = True
             state.watchdog.last_contact = utc_now()
             state.watchdog.last_error = None
             state.locked = bool(remote.get("locked"))
@@ -275,7 +294,7 @@ class Engine:
         billable = InstanceState(state.state).is_billable_compute
         state.mark_billable(billable)
         if state.state == InstanceState.STOPPED.value:
-            state.mark_stopped()
+            state.mark_stopped(ran_at=[current.created_at or None])
         elif billable and state.stopped_since is not None:
             # Restarted outside this CLI (web console, another machine): a new
             # session begins now.
@@ -774,8 +793,13 @@ class Engine:
             self.store.save(state)
 
         cfg = self.policy_config(state.hourly_cost_usd)
+        idle_skipped = self._idle_blind(state)
+        if idle_skipped:
+            cfg.idle_timeout_s = None
         snap = self.snapshot(state)
         decision = policy.evaluate(snap, cfg)
+        if idle_skipped:
+            decision.detail["idle_skipped"] = "watchdog_unreachable"
         remote = None
         client = self.beacon(state)
         if client is not None:
@@ -958,6 +982,9 @@ class Engine:
                 return {"action": policy.ACTION_NONE, "reason": "no_instance"}
 
             cfg = self.policy_config(state.hourly_cost_usd)
+            idle_skipped = self._idle_blind(state)
+            if idle_skipped:
+                cfg.idle_timeout_s = None
             snap = self.snapshot(state)
 
             if state.locked and snap.lock_expired(cfg):
@@ -967,6 +994,8 @@ class Engine:
                 snap = self.snapshot(state)
 
             decision = policy.evaluate(snap, cfg)
+            if idle_skipped:
+                decision.detail["idle_skipped"] = "watchdog_unreachable"
             if decision.terminates and apply:
                 self.events.emit(
                     ev.LIFECYCLE_GUARD_TRIGGERED,

@@ -14,7 +14,7 @@ from ..core.config import (
     CONFIG_FILENAMES,
 )
 from ..core.errors import JambuError
-from ._common import console, fmt_money, get_context, handle, print_json
+from ._common import console, fmt_money, get_context, handle, print_json, register_project
 
 
 def init_command(
@@ -80,6 +80,7 @@ def setup_command(
     context = get_context(ctx)
     try:
         engine = context.engine()
+        register_project(context)
         state = engine.setup(
             recreate=recreate, allow_cost_override=allow_cost_override, wait=not no_wait
         )

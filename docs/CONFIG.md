@@ -190,8 +190,9 @@ bound instead of being killed for the hours it spent stopped.
 provider where a stopped instance still bills, `validate` warns when `stopped_ttl`
 is `null` and `auto_destroy` is `false`: nothing would ever remove the instance.
 
-`gpu sweep` reuses `max_lifetime` and `stopped_ttl` from the nearest `jambu.yaml`
-as account-wide thresholds. See
+`gpu sweep` guards every project registered by `gpu setup` with that project's own
+`max_lifetime`, lock and `stopped_ttl`. Instances no project tracks are orphans,
+judged by the sweep's own `--orphan-max-age` and `--stopped-ttl` flags. See
 [Keeping the account clean](USAGE.md#keeping-the-account-clean).
 
 ---

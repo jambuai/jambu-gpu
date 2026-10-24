@@ -22,7 +22,7 @@ gpu run python experiment.py
 
 When you are finished, `gpu destroy`. If you walk away, the idle timeout does it.
 
-As a last line of defense, `gpu ls` shows every jambu instance in the account and `gpu sweep --install-timer` sets up a systemd user timer that removes the ones whose guard failed. See [Keeping the account clean](docs/USAGE.md#keeping-the-account-clean).
+As a last line of defense, `gpu ls` shows every jambu instance in the account and `gpu sweep --install-timer` sets up a systemd user timer that guards every project on the machine by its own rules and cleans up the orphans no project tracks. See [Keeping the account clean](docs/USAGE.md#keeping-the-account-clean).
 
 The API key is read from the environment, a project `.env`, or `~/.jambu/credentials`. It never goes in the manifest.
 
