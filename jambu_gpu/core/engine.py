@@ -140,6 +140,8 @@ class Engine:
             self.config.lifecycle.watchdog.enabled
             and state.watchdog.installed
             and not self.watchdog_read
+            # A stopped machine has no watchdog to reach and no idle to judge.
+            and InstanceState(state.state).is_billable_compute
         )
 
     def beacon(self, state: RuntimeState) -> Optional[WatchdogClient]:

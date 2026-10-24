@@ -309,6 +309,20 @@ def test_a_reachable_watchdog_lets_the_cli_apply_idle(write_config, monkeypatch)
     assert "idle_skipped" not in decision["detail"]
 
 
+def test_a_stopped_instance_is_not_reported_as_idle_skipped(write_config, monkeypatch):
+    """Seen live: `gpu status` on a stopped machine said idle was left to the watchdog."""
+    engine = make_engine(write_config(lifecycle={"idle_timeout": "15m"}))
+    state = engine.setup(wait=False)
+    with engine.store.transaction() as stored:
+        stored.watchdog.installed = True
+    engine.provider.stop(state.instance)
+    monkeypatch.setattr(engine, "beacon", lambda _state: _Unreachable())
+
+    decision = engine.guard_tick(apply=False)
+    assert decision["reason"] == "already_terminal"
+    assert "idle_skipped" not in decision["detail"]
+
+
 def test_without_a_watchdog_the_cli_guard_owns_idle(write_config):
     engine = make_engine(
         write_config(lifecycle={"idle_timeout": "15m", "watchdog": {"enabled": False}})
