@@ -16,6 +16,9 @@ API_KEY_ENV = "VAST_API_KEY"
 # is replaced by Vast's supervisor, so we launch the model server ourselves).
 DEFAULT_RUNTYPE = "ssh_direc ssh_proxy"
 
+# Vast rejects a create whose onstart script is longer than this.
+ONSTART_MAX_BYTES = 16384
+
 DEFAULT_SEARCH_LIMIT = 24
 DEFAULT_MIN_RELIABILITY = 0.95
 DEFAULT_MIN_INET_DOWN_MBPS = 100.0

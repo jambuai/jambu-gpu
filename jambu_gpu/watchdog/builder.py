@@ -8,6 +8,7 @@ knows about the other.
 
 from __future__ import annotations
 
+import ast
 import base64
 import json
 import zlib
@@ -55,11 +56,35 @@ def _strip_future(source: str) -> str:
     )
 
 
+def _compact(source: str) -> str:
+    """Same code without comments or docstrings.
+
+    The boot script rides in a size-capped provider field (Vast: 16 KB), so
+    what travels is the parsed-and-unparsed source: identical semantics, none
+    of the prose.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(body, list) or not body:
+            continue
+        first = body[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            node.body = body[1:] or [ast.Pass()]
+    return ast.unparse(tree)
+
+
 def build_agent_source(actions_source: Optional[str] = None) -> str:
     """Return the full stdlib-only watchdog script."""
-    policy_source = _strip_future(Path(policy_module.__file__).read_text())
-    body_source = _strip_future((Path(__file__).parent / "agent_body.py").read_text())
-    actions = _strip_future(actions_source) if actions_source else _FALLBACK_ACTIONS
+    policy_source = _compact(_strip_future(Path(policy_module.__file__).read_text()))
+    body_source = _compact(
+        _strip_future((Path(__file__).parent / "agent_body.py").read_text())
+    )
+    actions = _compact(_strip_future(actions_source or _FALLBACK_ACTIONS))
     return "\n\n".join(
         [
             _HEADER,

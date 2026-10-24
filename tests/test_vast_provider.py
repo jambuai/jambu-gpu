@@ -296,3 +296,30 @@ def test_a_404_is_still_vastnotfound_even_with_a_success_false_body(provider):
     # get_instance() catches VastNotFound internally and returns None - it
     # must not see a generic ProviderError instead.
     assert provider.status(Instance(id="123", provider="vast")).exists is False
+
+
+def test_the_real_boot_script_fits_vasts_onstart_limit(write_config, monkeypatch):
+    """Caught on a live run: Vast refuses onstart scripts over 16 KB."""
+    from jambu_gpu.core.engine import Engine
+    from jambu_gpu.providers.vast.config import ONSTART_MAX_BYTES
+
+    monkeypatch.setenv("VAST_API_KEY", "k" * 64)
+    monkeypatch.setenv("HF_TOKEN", "hf_" + "t" * 37)
+    config = write_config(
+        model={"id": "empero-ai/Qwythos-9B-v2", "hf_token_env": "HF_TOKEN"},
+        budget={"max_hourly_cost_usd": 1.5, "max_session_cost_usd": 4.0},
+    )
+    onstart = Engine(config)._build_onstart("t" * 43)
+    # Headroom so the next feature fails here, not on a paid create.
+    assert len(onstart.encode()) < ONSTART_MAX_BYTES - 1500
+
+
+@respx.mock
+def test_an_oversized_boot_script_fails_before_any_api_call(provider):
+    from jambu_gpu.core.errors import ProvisioningError
+    from jambu_gpu.core.models import ComputeSpec, GpuSpec
+
+    spec = ComputeSpec(gpu=GpuSpec(min_vram_gb=24, count=1), disk_gb=80, onstart="x" * 20000)
+    with pytest.raises(ProvisioningError, match="onstart limit"):
+        provider.setup(spec)
+    assert respx.calls.call_count == 0

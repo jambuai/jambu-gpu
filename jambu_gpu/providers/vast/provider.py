@@ -40,7 +40,7 @@ from ...core.models import (
 from ..base import GPUProvider, WatchdogSpec
 from . import mapper
 from .client import VastClient, VastNotFound
-from .config import API_KEY_ENV, VastOptions
+from .config import API_KEY_ENV, ONSTART_MAX_BYTES, VastOptions
 
 # Executed inside the remote watchdog; stdlib only, no package imports.
 WATCHDOG_ACTIONS = '''
@@ -243,6 +243,12 @@ class VastProvider(GPUProvider):
         return offers[:limit]
 
     def setup(self, spec: ComputeSpec) -> Instance:
+        # Fail before renting anything: Vast would refuse every offer anyway.
+        if len(spec.onstart.encode()) > ONSTART_MAX_BYTES:
+            raise ProvisioningError(
+                f"the boot script is {len(spec.onstart.encode())} bytes, over Vast's "
+                f"{ONSTART_MAX_BYTES}-byte onstart limit"
+            )
         offers = self.find_offers(spec, limit=self.options.search_limit)
         if not offers:
             raise CapacityUnavailableError(
