@@ -5,10 +5,12 @@ The CLI process cannot be responsible for idle shutdown. Close the laptop and a 
 ```
 CLI ──provisions──> instance
                       │
-                      ├── watchdog (HTTP :8777, authenticated)
-                      │     ├── holds the activity and heartbeat state
-                      │     ├── evaluates the lifecycle policy every 60s
-                      │     └── calls the provider API to stop or destroy itself
+                      ├── supervisor (bash respawn loop)
+                      │     └── watchdog (HTTP :8777, authenticated)
+                      │           ├── holds the activity and heartbeat state
+                      │           ├── reads vLLM /metrics for inference traffic
+                      │           ├── evaluates the lifecycle policy every 60s
+                      │           └── calls the provider API to stop or destroy itself
                       └── vLLM :8000
 ```
 
@@ -18,13 +20,52 @@ An instance stays billable only while:
 
 1. a workload is running (heartbeat alive), or
 2. a workload is queued, or the model is still starting, or
-3. an explicit lock is active.
+3. the model server is serving requests, or
+4. an explicit lock is active.
 
 Anything else becomes `STOPPED` or `DESTROYED`, with the reason recorded.
 
-Activity is a running workload, a queued workload, model startup, or an active lock. A healthy vLLM server, a health check, and an open SSH session are not activity. If they were, an idle server would stay up forever.
+Activity is a running workload, a queued workload, model startup, inference traffic, or an active lock. A healthy vLLM server, a health check, a metrics scrape, and an open SSH session are not activity. If they were, an idle server would stay up forever.
 
 A crashed CLI, a dropped SSH session, or a sleeping laptop stops the heartbeat. After `lifecycle.heartbeat_grace` the workload is stale, the instance goes idle, and the normal idle rules apply.
+
+## Inference traffic is activity
+
+An agent that calls the vLLM endpoint directly, without `gpu run`, is still using the machine. The watchdog reads vLLM's Prometheus endpoint (`http://127.0.0.1:8000/metrics`) every `min(interval, 15s)` and marks activity when:
+
+- a gauge is above zero: `vllm:num_requests_running`, `vllm:num_requests_waiting`, or
+- a counter grew since the last successful read: `vllm:request_success_total`, `vllm:prompt_tokens_total`.
+
+The first read only sets the baseline, so totals left over from earlier traffic do not keep the machine up. A counter that goes down means vLLM restarted; it rebaselines and does not count. A probe error is never activity, and it is logged as `activity_probe_error` at most once every 10 minutes. `GET /state` shows the last read under `last_probe` (`ok`, `values`, `last_traffic_at`).
+
+Traffic only feeds the idle timer. It does not override `max_lifetime`, the session budget, or locks.
+
+## Sessions and restarts
+
+A Vast.ai stop keeps the container disk, and the onstart script runs again on every container start. The watchdog state in `/var/lib/jambu/activity.json` therefore survives a stop/start, including the flag that says the instance was already stopped.
+
+The onstart script sets `JAMBU_SESSION_STARTED_AT=$(date +%s)` once per container start and passes it to the watchdog. On boot the watchdog compares it with the stored `session_started_at`:
+
+- **Different** (the instance was restarted): new session. The guard is re-armed, startup grace starts over, `last_activity` is now, workloads left running or queued are marked failed, and retry counters reset. Logged as `session_started`.
+- **Equal** (the supervisor respawned a crashed watchdog in the same container start): state is kept.
+
+`max_lifetime`, the session budget (`hourly_cost × session_age`) and startup grace are measured from the session start, not from creation. A restarted instance gets a fresh lease and is not killed the moment it boots. `GET /state` reports both `age_seconds` (since creation) and `session_age_seconds`.
+
+## Retries and escalation
+
+A failed provider call never disarms the guard. A transient API error is logged as `provider_error`, then `guard_retry` with the attempt count, and the guard tries again on its next tick.
+
+After 3 consecutive failed stops the watchdog destroys the instance instead, if the provider supports destroy (reason `stop_failed_escalation`). A machine that bills forever costs more than a lost disk.
+
+A successful call does not end the loop either. If the provider accepted the call but the machine is still running after `max(300s, 5 × interval)`, the watchdog issues it again (`guard_reissue`). A failed manual `POST /shutdown` is retried the same way.
+
+## The supervisor
+
+The watchdog runs inside a bash respawn loop started with `nohup`. If the watchdog crashes, the loop logs its exit code to `/var/log/jambu/watchdog.log` and starts it again 5 seconds later. `/var/run/jambu/watchdog.pid` holds the loop's pid; sending it `TERM` stops the loop and the watchdog together. The watchdog still starts before the model server.
+
+## Stopped instances
+
+A stopped Vast.ai instance still bills for storage, and its watchdog is not running. Set `lifecycle.stopped_ttl` and the policy destroys an instance that has been stopped longer than that (reason `stopped_ttl`). This needs destroy support and no active lock. `gpu guard` enforces it from outside, since nothing runs on a stopped machine.
 
 ## A second path
 

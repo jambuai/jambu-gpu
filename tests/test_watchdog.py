@@ -7,18 +7,23 @@ enforcement does not depend on the local CLI staying alive.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
 from jambu_gpu.core.beacon import WatchdogClient
 from jambu_gpu.core.policy import PolicyConfig
+from jambu_gpu.watchdog import agent_body
 from jambu_gpu.watchdog.builder import (
     build_agent_config,
     build_agent_source,
@@ -53,13 +58,52 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+# Provider actions that fail with a simulated HTTP 503 the first
+# JAMBU_TEST_FAIL_<ACTION> times, logging every attempt.
+FLAKY_ACTIONS = '''
+import json as _json
+import os as _os
+
+
+def _attempt(action, ctx):
+    path = _os.environ["JAMBU_TEST_ATTEMPTS"]
+    with open(path, "a") as handle:
+        handle.write(_json.dumps({"action": action}) + "\\n")
+    with open(path) as handle:
+        count = sum(1 for line in handle if _json.loads(line)["action"] == action)
+    if count <= int(_os.environ.get("JAMBU_TEST_FAIL_" + action.upper(), "0")):
+        raise RuntimeError("HTTP 503 Service Unavailable (simulated)")
+    with open(_os.environ["JAMBU_TEST_MARKER"], "w") as handle:
+        _json.dump({"action": action, "instance_id": ctx.get("instance_id")}, handle)
+
+
+def provider_stop(ctx):
+    _attempt("stop", ctx)
+
+
+def provider_destroy(ctx):
+    _attempt("destroy", ctx)
+'''
+
+
 class Agent:
-    def __init__(self, tmp_path: Path, policy: PolicyConfig, **overrides):
+    def __init__(
+        self,
+        tmp_path: Path,
+        policy: PolicyConfig,
+        *,
+        actions: str = MARKER_ACTIONS,
+        env: dict | None = None,
+        state: dict | None = None,
+        **overrides,
+    ):
         self.dir = tmp_path
         self.token = generate_token()
         self.port = free_port()
         self.marker = tmp_path / "marker.json"
         self.events = tmp_path / "events.jsonl"
+        self.attempts = tmp_path / "attempts.jsonl"
+        self.state_path = tmp_path / "activity.json"
 
         config = build_agent_config(
             provider="test",
@@ -70,39 +114,63 @@ class Agent:
             startup_grace_s=overrides.pop("startup_grace_s", 1.0),
             policy=policy,
             created_at=overrides.pop("created_at", time.time()),
+            activity_probe=overrides.pop("activity_probe", None),
         )
         config.update(overrides)
         (tmp_path / "watchdog.json").write_text(json.dumps(config))
-        (tmp_path / "agent.py").write_text(build_agent_source(MARKER_ACTIONS))
+        (tmp_path / "agent.py").write_text(build_agent_source(actions))
+        if state is not None:
+            self.state_path.write_text(json.dumps(state))
 
-        env = dict(os.environ)
-        env.update(
+        self.env = dict(os.environ)
+        self.env.pop("JAMBU_SESSION_STARTED_AT", None)
+        self.env.update(
             {
                 "JAMBU_WATCHDOG_CONFIG": str(tmp_path / "watchdog.json"),
-                "JAMBU_WATCHDOG_STATE": str(tmp_path / "activity.json"),
+                "JAMBU_WATCHDOG_STATE": str(self.state_path),
                 "JAMBU_WATCHDOG_EVENTS": str(self.events),
                 "JAMBU_TEST_MARKER": str(self.marker),
+                "JAMBU_TEST_ATTEMPTS": str(self.attempts),
             }
         )
-        self.process = subprocess.Popen(
-            [sys.executable, "-u", str(tmp_path / "agent.py")],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        self.env.update(env or {})
         self.client = WatchdogClient(f"http://127.0.0.1:{self.port}", self.token, timeout=5.0)
+        self.start()
+
+    def start(self, env: dict | None = None) -> None:
+        """(Re)launch the agent process against the same config and state."""
+        self.env.update(env or {})
+        self.log = self.dir / "agent.log"
+        # A file, not a pipe: a long-running agent would block on a full pipe.
+        with open(self.log, "a") as log:
+            self.process = subprocess.Popen(
+                [sys.executable, "-u", str(self.dir / "agent.py")],
+                env=self.env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
         self._await_boot()
 
     def _await_boot(self) -> None:
         deadline = time.time() + 20
         while time.time() < deadline:
             if self.process.poll() is not None:
-                raise AssertionError(f"watchdog died: {self.process.stdout.read()}")
+                raise AssertionError(f"watchdog died: {self.log.read_text()}")
             if self.client.ping():
                 return
             time.sleep(0.2)
         raise AssertionError("watchdog never came up")
+
+    def records(self, event: str | None = None) -> list[dict]:
+        if not self.events.exists():
+            return []
+        out = [json.loads(line) for line in self.events.read_text().splitlines() if line.strip()]
+        return [r for r in out if event is None or r["event"] == event]
+
+    def attempted(self) -> list[str]:
+        if not self.attempts.exists():
+            return []
+        return [json.loads(line)["action"] for line in self.attempts.read_text().splitlines()]
 
     def wait_for_marker(self, timeout: float = 20.0):
         deadline = time.time() + timeout
@@ -122,6 +190,8 @@ class Agent:
         ]
 
     def close(self) -> None:
+        if self.process.poll() is not None:
+            return
         self.process.terminate()
         try:
             self.process.wait(timeout=5)
@@ -311,6 +381,16 @@ def test_the_boot_script_reconstitutes_the_agent_byte_for_byte(tmp_path):
     assert len(script) < len(source), "the payload must be compressed, not inlined raw"
 
     root = tmp_path / "root"
+    boot = write_local_boot_script(tmp_path, script, root)
+    try:
+        subprocess.run(["bash", str(boot)], check=True, timeout=60)
+        assert (root / "opt" / "watchdog.py").read_text() == source
+    finally:
+        kill_supervisor(root)
+
+
+def write_local_boot_script(tmp_path: Path, script: str, root: Path) -> Path:
+    """The onstart script with its absolute paths moved under ``root``."""
     rewritten = script
     for remote, local in (
         ("/etc/jambu", root / "etc"),
@@ -322,6 +402,463 @@ def test_the_boot_script_reconstitutes_the_agent_byte_for_byte(tmp_path):
         rewritten = rewritten.replace(remote, str(local))
     boot = tmp_path / "onstart.sh"
     boot.write_text(rewritten)
+    return boot
 
-    subprocess.run(["bash", str(boot)], check=True, timeout=60)
-    assert (root / "opt" / "watchdog.py").read_text() == source
+
+def _children(pid: int) -> list[int]:
+    try:
+        text = Path(f"/proc/{pid}/task/{pid}/children").read_text()
+    except OSError:
+        out = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True)
+        text = out.stdout
+    return [int(p) for p in text.split()]
+
+
+def kill_supervisor(root: Path) -> None:
+    pid_file = root / "run" / "watchdog.pid"
+    if not pid_file.exists():
+        return
+    pid = int(pid_file.read_text().strip())
+    children = _children(pid)
+    for target in [pid] + children:
+        try:
+            os.kill(target, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+# --- restart sessions --------------------------------------------------------
+
+
+def persisted_previous_session(now: float, session: float, **extra) -> dict:
+    """activity.json as a stopped instance leaves it on its container disk."""
+    state = {
+        "created_at": now - 10_000,
+        "session_started_at": session,
+        "last_activity": now - 9_000,
+        "starting": False,
+        "locked": False,
+        "locked_until": None,
+        "terminated": True,
+        "terminated_at": now - 9_000,
+        "workloads": {
+            "w-old": {
+                "started_at": now - 9_500,
+                "last_heartbeat": now - 9_100,
+                "label": "interrupted by the stop",
+                "state": "running",
+            }
+        },
+    }
+    state.update(extra)
+    return state
+
+
+def test_a_restarted_instance_is_guarded_again(agent_factory):
+    """Bug: terminated=True survived the stop/start and disarmed the guard."""
+    now = time.time()
+    session = str(int(now))
+    agent = agent_factory(
+        policy(max_lifetime_s=3_600.0),
+        created_at=now - 10_000,
+        state=persisted_previous_session(now, session=now - 10_000),
+        env={"JAMBU_SESSION_STARTED_AT": session},
+        startup_grace_s=600.0,
+    )
+    state = agent.client.state()
+    assert state["terminated"] is False
+    assert state["session_started_at"] == float(session)
+    assert state["session_age_seconds"] < 60
+    assert state["age_seconds"] > 9_000  # creation age is still the truth
+    assert state["starting"] is True
+    assert state["workloads"]["w-old"]["state"] == "failed"
+    assert "session_started" in agent.event_names()
+
+    agent.client.mark_ready()
+    assert agent.wait_for_marker()["action"] == "stop"
+    # Measured from the session, max_lifetime must not have been the trigger.
+    assert agent.records("lifecycle_guard_triggered")[-1]["reason"] == "idle_timeout"
+
+
+def test_a_supervisor_respawn_in_the_same_session_keeps_state(agent_factory):
+    now = time.time()
+    session = int(now) - 30
+    agent = agent_factory(
+        policy(),
+        state=persisted_previous_session(now, session=float(session), terminated_at=now),
+        env={"JAMBU_SESSION_STARTED_AT": str(session)},
+    )
+    time.sleep(3)
+    state = agent.client.state()
+    assert state["terminated"] is True
+    assert state["session_started_at"] == float(session)
+    assert state["workloads"]["w-old"]["state"] == "running"
+    assert not agent.marker.exists(), "a respawn must not re-fire a fresh stop"
+    assert "session_started" not in agent.event_names()
+
+
+def test_a_crashed_agent_respawned_by_hand_keeps_its_session(agent_factory):
+    session = str(int(time.time()))
+    agent = agent_factory(
+        policy(idle_timeout_s=3_600.0), env={"JAMBU_SESSION_STARTED_AT": session}
+    )
+    agent.client.mark_ready()
+    agent.client.lock(ttl_seconds=600, reason="keep")
+    agent.process.kill()
+    agent.process.wait()
+    agent.start()
+    state = agent.client.state()
+    assert state["locked"] is True
+    assert state["starting"] is False
+    assert agent.event_names().count("session_started") == 1
+
+
+# --- retries and escalation --------------------------------------------------
+
+
+def test_the_guard_survives_a_failed_stop_and_retries(agent_factory):
+    """Bug: one transient 503 used to end the guard loop for good."""
+    agent = agent_factory(
+        policy(), actions=FLAKY_ACTIONS, env={"JAMBU_TEST_FAIL_STOP": "1"}
+    )
+    agent.client.mark_ready()
+    assert agent.wait_for_marker(timeout=25)["action"] == "stop"
+    assert agent.attempted() == ["stop", "stop"]
+    names = agent.event_names()
+    assert "provider_error" in names
+    retry = agent.records("guard_retry")[0]
+    assert retry["attempt"] == 1 and retry["action"] == "stop"
+    assert agent.client.state()["terminated"] is True
+
+
+def test_repeated_stop_failures_escalate_to_destroy(agent_factory):
+    agent = agent_factory(
+        policy(), actions=FLAKY_ACTIONS, env={"JAMBU_TEST_FAIL_STOP": "999"}
+    )
+    agent.client.mark_ready()
+    assert agent.wait_for_marker(timeout=30)["action"] == "destroy"
+    assert agent.attempted() == ["stop", "stop", "stop", "destroy"]
+    trigger = agent.records("lifecycle_guard_triggered")[-1]
+    assert trigger["reason"] == "stop_failed_escalation"
+    assert trigger["original_reason"] == "idle_timeout"
+
+
+def test_no_escalation_when_destroy_is_unsupported(agent_factory):
+    agent = agent_factory(
+        policy(destroy_supported=False),
+        actions=FLAKY_ACTIONS,
+        env={"JAMBU_TEST_FAIL_STOP": "999"},
+    )
+    agent.client.mark_ready()
+    deadline = time.time() + 25
+    while time.time() < deadline and len(agent.attempted()) < 5:
+        time.sleep(0.3)
+    assert set(agent.attempted()) == {"stop"}
+    assert len(agent.attempted()) >= 5, "the guard must keep retrying"
+
+
+def test_an_accepted_stop_is_reissued_when_the_machine_stays_up(agent_factory):
+    agent = agent_factory(policy(), actions=FLAKY_ACTIONS, reissue_after_s=2.0)
+    agent.client.mark_ready()
+    assert agent.wait_for_marker()["action"] == "stop"
+    deadline = time.time() + 20
+    while time.time() < deadline and len(agent.attempted()) < 2:
+        time.sleep(0.3)
+    assert agent.attempted()[:2] == ["stop", "stop"]
+    assert "guard_reissue" in agent.event_names()
+
+
+def test_a_failed_manual_shutdown_is_retried_by_the_guard(agent_factory):
+    agent = agent_factory(
+        policy(idle_timeout_s=3_600.0),
+        actions=FLAKY_ACTIONS,
+        env={"JAMBU_TEST_FAIL_DESTROY": "1"},
+    )
+    agent.client.shutdown("destroy", reason="manual")
+    assert agent.wait_for_marker(timeout=25)["action"] == "destroy"
+    assert agent.attempted() == ["destroy", "destroy"]
+
+
+# --- supervisor --------------------------------------------------------------
+
+
+def test_onstart_wraps_the_watchdog_in_a_supervisor():
+    script = build_onstart_script(
+        agent_source="print('agent')",
+        agent_config={"port": 8777},
+        runtime_start_command="nohup vllm serve &",
+    )
+    subprocess.run(["bash", "-n", "-c", script], check=True)
+    assert "export JAMBU_SESSION_STARTED_AT=$(date +%s)" in script
+    assert "while true; do" in script
+    assert "sleep 5" in script
+    assert "echo $! > /var/run/jambu/watchdog.pid" in script
+    assert script.index("JAMBU_SESSION_STARTED_AT") < script.index("while true")
+    assert script.index("while true") < script.index("vllm serve")
+
+
+def _ping(port: int) -> bool:
+    return WatchdogClient(f"http://127.0.0.1:{port}", "x", timeout=1.0).ping()
+
+
+def test_the_supervisor_respawns_a_killed_watchdog(tmp_path):
+    port = free_port()
+    root = tmp_path / "root"
+    config = build_agent_config(
+        provider="test",
+        instance_id="42",
+        token=generate_token(),
+        port=port,
+        interval_s=1.0,
+        startup_grace_s=600.0,
+        policy=policy(idle_timeout_s=3_600.0),
+        created_at=time.time(),
+    )
+    script = build_onstart_script(
+        agent_source=build_agent_source(MARKER_ACTIONS),
+        agent_config=config,
+        runtime_start_command="echo model",
+    )
+    boot = write_local_boot_script(tmp_path, script, root)
+    env = dict(os.environ)
+    env.pop("JAMBU_SESSION_STARTED_AT", None)
+    env.update(
+        {
+            "JAMBU_WATCHDOG_CONFIG": str(root / "etc" / "watchdog.json"),
+            "JAMBU_WATCHDOG_STATE": str(root / "lib" / "activity.json"),
+            "JAMBU_WATCHDOG_EVENTS": str(root / "log" / "events.jsonl"),
+            "JAMBU_TEST_MARKER": str(tmp_path / "marker.json"),
+        }
+    )
+    events = root / "log" / "events.jsonl"
+
+    def wait(predicate, timeout=20.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.2)
+        return False
+
+    try:
+        subprocess.run(["bash", str(boot)], check=True, timeout=60, env=env)
+        assert wait(lambda: _ping(port)), "watchdog never came up under the supervisor"
+        supervisor = int((root / "run" / "watchdog.pid").read_text().strip())
+        (first,) = _children(supervisor)
+        os.kill(first, signal.SIGKILL)
+        assert wait(lambda: _children(supervisor) and _children(supervisor) != [first])
+        assert wait(lambda: _ping(port)), "the supervisor did not respawn the watchdog"
+
+        names = [json.loads(line)["event"] for line in events.read_text().splitlines()]
+        assert names.count("watchdog_started") == 2
+        # Same container start, same session: the respawn must not reset state.
+        assert names.count("session_started") == 1
+        assert "respawning" in (root / "log" / "watchdog.log").read_text()
+
+        # `kill $(cat watchdog.pid)` still means "stop the watchdog".
+        (second,) = _children(supervisor)
+        os.kill(supervisor, signal.SIGTERM)
+        assert wait(lambda: not Path(f"/proc/{second}").exists() and not _ping(port))
+    finally:
+        kill_supervisor(root)
+
+
+# --- inference traffic as activity -------------------------------------------
+
+
+VLLM_METRICS = """\
+# HELP vllm:num_requests_running Number of requests currently running on GPU.
+# TYPE vllm:num_requests_running gauge
+vllm:num_requests_running{{model_name="Qwen/Qwen2.5-7B"}} {running}
+vllm:num_requests_waiting{{model_name="Qwen/Qwen2.5-7B"}} 0.0
+# TYPE vllm:request_success_total counter
+vllm:request_success_total{{finished_reason="stop",model_name="Qwen/Qwen2.5-7B"}} {ok}
+vllm:request_success_total{{finished_reason="length",model_name="Qwen/Qwen2.5-7B"}} 1.0
+vllm:prompt_tokens_total{{model_name="Qwen/Qwen2.5-7B"}} {tokens} 1700000000000
+"""
+
+
+class FakeMetrics:
+    def __init__(self):
+        self.running = 0
+        self.ok = 0
+        self.tokens = 0
+        metrics = self
+
+        class _Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                return
+
+            def do_GET(self):  # noqa: N802
+                body = VLLM_METRICS.format(
+                    running=float(metrics.running), ok=float(metrics.ok), tokens=float(metrics.tokens)
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; version=0.0.4")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/metrics"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def probe(self) -> dict:
+        return {
+            "kind": "prometheus",
+            "url": self.url,
+            "gauges": ["vllm:num_requests_running", "vllm:num_requests_waiting"],
+            "counters": ["vllm:request_success_total", "vllm:prompt_tokens_total"],
+        }
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def fake_metrics():
+    metrics = FakeMetrics()
+    yield metrics
+    metrics.close()
+
+
+def test_direct_inference_traffic_keeps_the_instance_alive(agent_factory, fake_metrics):
+    """An agent calling vLLM directly, never through `gpu run`, is still use."""
+    agent = agent_factory(policy(idle_timeout_s=3.0), activity_probe=fake_metrics.probe())
+    agent.client.mark_ready()
+
+    for _ in range(16):  # ~8s of traffic, well past the 3s idle timeout
+        fake_metrics.ok += 1
+        fake_metrics.tokens += 50
+        time.sleep(0.5)
+    assert not agent.marker.exists(), "served traffic must count as activity"
+
+    probe = agent.client.state()["last_probe"]
+    assert probe["ok"] is True
+    assert probe["last_traffic_at"] is not None
+    assert probe["values"]["vllm:request_success_total"] > 1.0
+
+    # Traffic ends: the normal idle rule takes over.
+    assert agent.wait_for_marker(timeout=20)["action"] == "stop"
+    assert agent.records("lifecycle_guard_triggered")[-1]["reason"] == "idle_timeout"
+
+
+def test_an_in_flight_request_keeps_the_instance_alive(agent_factory, fake_metrics):
+    fake_metrics.running = 1  # one long generation, counters flat
+    agent = agent_factory(policy(idle_timeout_s=2.0), activity_probe=fake_metrics.probe())
+    agent.client.mark_ready()
+    time.sleep(5)
+    assert not agent.marker.exists()
+    fake_metrics.running = 0
+    assert agent.wait_for_marker(timeout=20)["action"] == "stop"
+
+
+def test_a_flat_metrics_endpoint_is_not_activity(agent_factory, fake_metrics):
+    fake_metrics.ok = 7  # pre-existing totals only establish the baseline
+    agent = agent_factory(policy(), activity_probe=fake_metrics.probe())
+    agent.client.mark_ready()
+    assert agent.wait_for_marker()["action"] == "stop"
+    assert agent.client.state()["last_probe"]["last_traffic_at"] is None
+
+
+def test_probe_errors_are_not_activity_and_are_logged_once(agent_factory):
+    dead = f"http://127.0.0.1:{free_port()}/metrics"
+    agent = agent_factory(
+        policy(), activity_probe={"kind": "prometheus", "url": dead, "gauges": [], "counters": []}
+    )
+    agent.client.mark_ready()
+    assert agent.wait_for_marker()["action"] == "stop"
+    time.sleep(1.5)
+    assert agent.event_names().count("activity_probe_error") == 1
+    assert agent.client.state()["last_probe"]["ok"] is False
+
+
+def test_watchdog_health_hits_are_not_activity(agent_factory):
+    agent = agent_factory(policy())
+    agent.client.mark_ready()
+    deadline = time.time() + 20
+    while time.time() < deadline and not agent.marker.exists():
+        agent.client.ping()
+        time.sleep(0.2)
+    assert agent.marker.exists()
+
+
+def test_build_agent_config_carries_the_activity_probe():
+    probe = {"kind": "prometheus", "url": "http://127.0.0.1:8000/metrics", "gauges": [], "counters": []}
+    kwargs = dict(
+        provider="test",
+        instance_id="1",
+        token="t",
+        port=1,
+        interval_s=1.0,
+        startup_grace_s=1.0,
+        policy=policy(),
+        created_at=0.0,
+    )
+    assert "activity_probe" not in build_agent_config(**kwargs)
+    assert build_agent_config(activity_probe=probe, **kwargs)["activity_probe"] == probe
+
+
+# --- prometheus parsing (pure functions, imported directly) ------------------
+
+
+def test_prometheus_samples_are_summed_across_label_sets():
+    totals = agent_body.parse_prometheus(VLLM_METRICS.format(running=2.0, ok=3.0, tokens=40.0))
+    assert totals["vllm:num_requests_running"] == 2.0
+    assert totals["vllm:request_success_total"] == 4.0
+    assert totals["vllm:prompt_tokens_total"] == 40.0  # trailing timestamp ignored
+
+
+def test_prometheus_parser_tolerates_awkward_lines():
+    text = "\n".join(
+        [
+            "# HELP x something {with braces}",
+            "",
+            'weird{path="/a}b",note="say \\"hi\\""} 5',
+            "plain 1.5",
+            "plain 2",
+            "broken_no_value",
+            "nan_metric NaN",
+            "bad_value abc",
+        ]
+    )
+    totals = agent_body.parse_prometheus(text)
+    assert totals == {"weird": 5.0, "plain": 3.5}
+
+
+def test_metric_lookup_tolerates_total_suffixes():
+    totals = {"vllm:request_success_total": 3.0, "tokens": 9.0}
+    assert agent_body.metric_value(totals, "vllm:request_success") == 3.0
+    assert agent_body.metric_value(totals, "tokens_total") == 9.0
+    assert agent_body.metric_value(totals, "missing") is None
+
+
+def test_traffic_detection_rules():
+    seen = agent_body.traffic_seen
+    gauges, counters = ["running"], ["done_total"]
+    assert seen({"running": 1.0}, None, gauges, counters) is True
+    assert seen({"done_total": 5.0}, None, gauges, counters) is False  # baseline only
+    assert seen({"done_total": 6.0}, {"done_total": 5.0}, gauges, counters) is True
+    assert seen({"done_total": 5.0}, {"done_total": 5.0}, gauges, counters) is False
+    assert seen({"done_total": 1.0}, {"done_total": 5.0}, gauges, counters) is False  # reset
+    assert seen({}, {}, gauges, counters) is False
+
+
+# --- token -------------------------------------------------------------------
+
+
+def test_the_token_compare_rejects_near_misses(agent_factory):
+    agent = agent_factory(policy(idle_timeout_s=3600.0))
+    for bad in ("", agent.token[:-1], agent.token + "x", agent.token[:-1] + "!"):
+        rogue = WatchdogClient(agent.client.base_url, bad, timeout=5.0)
+        assert rogue.try_state() is None, bad
+    # Non-ASCII junk must be a clean 401, not a crashed handler.
+    conn = http.client.HTTPConnection("127.0.0.1", agent.port, timeout=5)
+    conn.putrequest("GET", "/state")
+    conn.putheader("X-Jambu-Token", "ünïcode".encode("latin-1"))
+    conn.endheaders()
+    assert conn.getresponse().status == 401
+    conn.close()
+    assert agent.client.try_state() is not None
+    assert "hmac.compare_digest" in build_agent_source()

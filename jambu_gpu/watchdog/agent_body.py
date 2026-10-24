@@ -18,6 +18,11 @@ Contract with the CLI (all routes require ``X-Jambu-Token``):
     POST /lock                -> {ttl_seconds|until|null}
     POST /unlock
     POST /shutdown            -> {action: stop|destroy, reason}
+
+Sessions: the boot script exports ``JAMBU_SESSION_STARTED_AT`` once per
+container start. A value different from the stored one means the instance was
+restarted, so the persisted "terminated" flag and stale workloads are reset and
+the guard starts over. The same value means a supervisor respawn: keep state.
 """
 
 # The generated script inlines core/policy.py above this body. When this file
@@ -35,12 +40,15 @@ if "evaluate" not in globals():  # pragma: no cover - only in standalone import
         evaluate,
     )
 
+import hmac
 import json
+import math
 import os
 import sys
 import threading
 import time
 import traceback
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CONFIG_PATH = os.environ.get("JAMBU_WATCHDOG_CONFIG", "/etc/jambu/watchdog.json")
@@ -51,6 +59,13 @@ _LOCK = threading.RLock()
 _STATE = {}
 _CONFIG = {}
 _STOPPED = threading.Event()
+# Serializes provider calls; the guard loop and /shutdown may race.
+_ACTION_LOCK = threading.Lock()
+_PROBE = {}
+
+# Consecutive failed stops before giving up on the disk and destroying.
+STOP_ESCALATION_ATTEMPTS = 3
+PROBE_ERROR_LOG_EVERY_S = 600.0
 
 
 # --------------------------------------------------------------------------
@@ -92,6 +107,16 @@ def log_event(event, **fields):
     return record
 
 
+def _session_from_env():
+    raw = os.environ.get("JAMBU_SESSION_STARTED_AT")
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 def load_state():
     now = time.time()
     default = {
@@ -102,14 +127,68 @@ def load_state():
         "locked_until": None,
         "workloads": {},
         "terminated": False,
+        "terminated_at": None,
+        "stop_failures": 0,
+        "action_failures": 0,
+        "pending_shutdown": None,
+        "session_started_at": None,
     }
+    stored = None
     try:
         with open(STATE_PATH) as handle:
             stored = json.load(handle)
         default.update(stored)
     except (OSError, ValueError):
-        pass
-    return default
+        stored = None
+
+    session = _session_from_env()
+    if stored is None:
+        default["session_started_at"] = session if session is not None else now
+        log_event("session_started", session_started_at=default["session_started_at"], first_boot=True)
+        return default
+    if session is None:
+        # Old boot scripts and tests: no session marker, behave as before.
+        if default.get("session_started_at") is None:
+            default["session_started_at"] = default["created_at"]
+        return default
+    if default.get("session_started_at") == session:
+        return default  # supervisor respawn inside the same container start
+    return _new_session(default, session, now)
+
+
+def _new_session(state, session, now):
+    """The container was started again (e.g. `gpu` restarted a stopped instance).
+
+    Container disk survives a stop, so the previous session's "terminated" flag
+    would otherwise disarm the guard on the restarted, billing machine.
+    """
+    abandoned = []
+    for key, record in (state.get("workloads") or {}).items():
+        if record.get("state") in ("running", "queued"):
+            record["state"] = "failed"
+            record["finished_at"] = now
+            record["failure"] = "session_restarted"
+            abandoned.append(key)
+    previous = state.get("session_started_at")
+    state.update(
+        {
+            "session_started_at": session,
+            "terminated": False,
+            "terminated_at": None,
+            "starting": True,
+            "last_activity": now,
+            "stop_failures": 0,
+            "action_failures": 0,
+            "pending_shutdown": None,
+        }
+    )
+    log_event(
+        "session_started",
+        session_started_at=session,
+        previous_session_started_at=previous,
+        abandoned_workloads=abandoned,
+    )
+    return state
 
 
 def save_state():
@@ -153,7 +232,8 @@ def snapshot(now=None):
         starting = bool(_STATE.get("starting"))
         if starting:
             grace = float(_CONFIG.get("startup_grace_s") or 900.0)
-            if now - float(_STATE.get("created_at") or now) > grace:
+            began = _STATE.get("session_started_at") or _STATE.get("created_at") or now
+            if now - float(began) > grace:
                 # The CLI never confirmed readiness; stop pretending we booted.
                 starting = False
                 _STATE["starting"] = False
@@ -168,6 +248,7 @@ def snapshot(now=None):
             locked=bool(_STATE.get("locked")),
             locked_until=_STATE.get("locked_until"),
             provider_state="ready",
+            session_started_at=_STATE.get("session_started_at"),
         )
 
 
@@ -177,41 +258,139 @@ def build_context():
     return ctx
 
 
-def terminate(action, reason, detail=None):
-    detail = detail or {}
-    with _LOCK:
-        if _STATE.get("terminated"):
-            return False
-        _STATE["terminated"] = True
-        save_state()
+def terminate(action, reason, detail=None, force=False):
+    """Ask the provider to stop or destroy this machine.
 
-    log_event(
-        "lifecycle_guard_triggered",
-        action=action,
-        reason=reason,
-        **detail,
-    )
-    ctx = build_context()
+    Returns True on success, False on a provider failure and None when skipped
+    (another call in flight, or already terminated and not ``force``). A
+    failure never disarms the guard: the loop retries on its next tick.
+    """
+    detail = detail or {}
+    if not _ACTION_LOCK.acquire(blocking=False):
+        return None
     try:
-        if action == ACTION_DESTROY:
-            provider_destroy(ctx)  # noqa: F821 - injected by the builder
-            log_event("instance_destroyed", reason=reason, **detail)
-        else:
-            provider_stop(ctx)  # noqa: F821 - injected by the builder
-            log_event("instance_stopped", reason=reason, **detail)
-    except Exception as exc:  # noqa: BLE001 - last line of defence
+        if _STATE.get("terminated") and not force:
+            return None
         log_event(
-            "provider_error",
+            "lifecycle_guard_triggered",
             action=action,
             reason=reason,
-            error=str(exc),
-            traceback=traceback.format_exc(limit=3),
+            **detail,
         )
+        ctx = build_context()
+        try:
+            if action == ACTION_DESTROY:
+                provider_destroy(ctx)  # noqa: F821 - injected by the builder
+                log_event("instance_destroyed", reason=reason, **detail)
+            else:
+                provider_stop(ctx)  # noqa: F821 - injected by the builder
+                log_event("instance_stopped", reason=reason, **detail)
+        except Exception as exc:  # noqa: BLE001 - last line of defence
+            with _LOCK:
+                _STATE["action_failures"] = int(_STATE.get("action_failures") or 0) + 1
+                if action == ACTION_STOP:
+                    _STATE["stop_failures"] = int(_STATE.get("stop_failures") or 0) + 1
+                save_state()
+            log_event(
+                "provider_error",
+                action=action,
+                reason=reason,
+                error=str(exc),
+                traceback=traceback.format_exc(limit=3),
+            )
+            return False
         with _LOCK:
+            _STATE["terminated"] = True
+            _STATE["terminated_at"] = time.time()
+            _STATE["terminated_action"] = action
+            _STATE["terminated_reason"] = reason
+            _STATE["stop_failures"] = 0
+            _STATE["action_failures"] = 0
+            save_state()
+        return True
+    finally:
+        _ACTION_LOCK.release()
+
+
+def reissue_after_s(interval):
+    configured = _CONFIG.get("reissue_after_s")
+    if configured is not None:
+        return float(configured)
+    return max(300.0, 5.0 * interval)
+
+
+def _choose(decision, cfg):
+    """(action, reason, pre-escalation reason) to attempt this tick, or None."""
+    action, reason = None, None
+    pending = _STATE.get("pending_shutdown")
+    if pending:
+        # An explicit request outranks whatever the policy would pick.
+        action = pending.get("action") or ACTION_STOP
+        reason = pending.get("reason") or "manual"
+    elif decision.terminates:
+        action, reason = decision.action, decision.reason
+    if action is None:
+        return None
+    if (
+        action == ACTION_STOP
+        and int(_STATE.get("stop_failures") or 0) >= STOP_ESCALATION_ATTEMPTS
+        and cfg.destroy_supported
+    ):
+        # Billing forever is worse than losing the disk.
+        return ACTION_DESTROY, "stop_failed_escalation", reason
+    return action, reason, None
+
+
+def guard_tick(interval, idle_announced):
+    cfg = policy_config()
+
+    with _LOCK:
+        if _STATE.get("terminated"):
+            since = float(_STATE.get("terminated_at") or 0)
+            if time.time() - since <= reissue_after_s(interval):
+                return idle_announced
+            # The provider accepted the call, yet this machine is still running.
             _STATE["terminated"] = False
             save_state()
-        return False
-    return True
+            log_event(
+                "guard_reissue",
+                previous_action=_STATE.get("terminated_action"),
+                seconds_since_terminate=round(time.time() - since, 1),
+            )
+
+    snap = snapshot()
+    with _LOCK:
+        if _STATE.get("locked") and snap.lock_expired(cfg):
+            _STATE["locked"] = False
+            _STATE["locked_until"] = None
+            save_state()
+            log_event("instance_unlocked", reason="lock_expired")
+
+    decision = evaluate(snap, cfg)
+    state = decision.detail.get("state")
+    if state == "idle" and not idle_announced:
+        idle_announced = True
+        log_event("instance_idle", **decision.detail)
+    elif state != "idle":
+        idle_announced = False
+
+    with _LOCK:
+        choice = _choose(decision, cfg)
+    if choice is None:
+        return idle_announced
+    action, reason, original = choice
+    detail = dict(decision.detail)
+    if original:
+        detail["original_reason"] = original
+    if terminate(action, reason, detail) is False:
+        log_event(
+            "guard_retry",
+            action=action,
+            reason=reason,
+            attempt=int(_STATE.get("action_failures") or 0),
+            stop_failures=int(_STATE.get("stop_failures") or 0),
+        )
+    return idle_announced
 
 
 def guard_loop():
@@ -224,33 +403,161 @@ def guard_loop():
         max_lifetime_seconds=cfg.max_lifetime_s,
         auto_stop=cfg.auto_stop,
         auto_destroy=cfg.auto_destroy,
+        session_started_at=_STATE.get("session_started_at"),
     )
     idle_announced = False
+    # Only process exit ends this loop: no decision or provider failure may.
     while not _STOPPED.wait(interval):
         try:
-            cfg = policy_config()
-            snap = snapshot()
-
-            with _LOCK:
-                if _STATE.get("locked") and snap.lock_expired(cfg):
-                    _STATE["locked"] = False
-                    _STATE["locked_until"] = None
-                    save_state()
-                    log_event("instance_unlocked", reason="lock_expired")
-
-            decision = evaluate(snap, cfg)
-            state = decision.detail.get("state")
-            if state == "idle" and not idle_announced:
-                idle_announced = True
-                log_event("instance_idle", **decision.detail)
-            elif state != "idle":
-                idle_announced = False
-
-            if decision.terminates:
-                terminate(decision.action, decision.reason, decision.detail)
-                _STOPPED.set()
+            idle_announced = guard_tick(interval, idle_announced)
         except Exception as exc:  # noqa: BLE001 - never let the guard die
             log_event("watchdog_error", error=str(exc), traceback=traceback.format_exc(limit=3))
+
+
+# --------------------------------------------------------------------------
+# inference traffic probe
+# --------------------------------------------------------------------------
+
+
+def _split_sample(line):
+    """``name{labels} value [timestamp]`` -> (name, value_text) or None."""
+    brace = line.find("{")
+    space = line.find(" ")
+    if brace != -1 and (space == -1 or brace < space):
+        name = line[:brace]
+        i, quoted = brace + 1, False
+        while i < len(line):
+            ch = line[i]
+            if quoted and ch == "\\":
+                i += 2
+                continue
+            if ch == '"':
+                quoted = not quoted
+            elif ch == "}" and not quoted:
+                break
+            i += 1
+        rest = line[i + 1 :].split()
+    else:
+        parts = line.split()
+        name, rest = (parts[0], parts[1:]) if parts else ("", [])
+    if not name or not rest:
+        return None
+    return name, rest[0]
+
+
+def parse_prometheus(text):
+    """Prometheus text format -> {metric name: sum of samples across label sets}."""
+    totals = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        sample = _split_sample(line)
+        if sample is None:
+            continue
+        name, value_text = sample
+        try:
+            value = float(value_text)
+        except ValueError:
+            continue
+        if math.isnan(value) or math.isinf(value):
+            continue
+        totals[name] = totals.get(name, 0.0) + value
+    return totals
+
+
+def metric_value(totals, name):
+    """Look a metric up, tolerating exporters that add or drop ``_total``."""
+    if name in totals:
+        return totals[name]
+    alt = name[: -len("_total")] if name.endswith("_total") else name + "_total"
+    return totals.get(alt)
+
+
+def traffic_seen(totals, previous, gauges, counters):
+    """True when a gauge is non-zero or a counter grew since ``previous``."""
+    for name in gauges:
+        value = metric_value(totals, name)
+        if value is not None and value > 0:
+            return True
+    if previous is None:
+        return False  # the first read only establishes the baseline
+    for name in counters:
+        value = metric_value(totals, name)
+        before = metric_value(previous, name)
+        # A drop means the runtime restarted its counters: rebaseline, not traffic.
+        if value is not None and before is not None and value > before:
+            return True
+    return False
+
+
+def probe_once(spec, previous):
+    """One scrape. Returns the new baseline (the old one on error)."""
+    now = time.time()
+    try:
+        with urllib.request.urlopen(spec["url"], timeout=5) as response:
+            text = response.read().decode("utf-8", "replace")
+        totals = parse_prometheus(text)
+    except Exception as exc:  # noqa: BLE001 - a probe error is never activity
+        with _LOCK:
+            _PROBE.update({"ok": False, "at": now, "error": str(exc)})
+            last_logged = _PROBE.get("error_logged_at") or 0
+            if now - last_logged >= PROBE_ERROR_LOG_EVERY_S:
+                _PROBE["error_logged_at"] = now
+                log_event("activity_probe_error", url=spec.get("url"), error=str(exc))
+        return previous
+
+    gauges = list(spec.get("gauges") or [])
+    counters = list(spec.get("counters") or [])
+    traffic = traffic_seen(totals, previous, gauges, counters)
+    summary = {}
+    for name in gauges + counters:
+        value = metric_value(totals, name)
+        if value is not None:
+            summary[name] = value
+    with _LOCK:
+        _PROBE.update({"ok": True, "at": now, "error": None, "values": summary})
+        if traffic:
+            _PROBE["last_traffic_at"] = now
+    if traffic:
+        touch("inference_traffic")
+    return totals
+
+
+def probe_loop(spec):
+    interval = float(_CONFIG.get("interval_s") or 60.0)
+    period = min(interval, 15.0)
+    previous = None
+    while not _STOPPED.is_set():
+        try:
+            previous = probe_once(spec, previous)
+        except Exception as exc:  # noqa: BLE001
+            log_event("watchdog_error", where="activity_probe", error=str(exc))
+        _STOPPED.wait(period)
+
+
+def probe_spec():
+    spec = _CONFIG.get("activity_probe")
+    if not isinstance(spec, dict) or not spec.get("url"):
+        return None
+    if (spec.get("kind") or "prometheus") != "prometheus":
+        return None
+    return spec
+
+
+def probe_payload():
+    spec = probe_spec()
+    if spec is None:
+        return None
+    with _LOCK:
+        return {
+            "url": spec.get("url"),
+            "ok": _PROBE.get("ok"),
+            "at": _PROBE.get("at"),
+            "error": _PROBE.get("error"),
+            "values": dict(_PROBE.get("values") or {}),
+            "last_traffic_at": _PROBE.get("last_traffic_at"),
+        }
 
 
 # --------------------------------------------------------------------------
@@ -271,7 +578,7 @@ class Handler(BaseHTTPRequestHandler):
         if not expected:
             return True
         supplied = self.headers.get("X-Jambu-Token") or ""
-        if supplied != expected:
+        if not hmac.compare_digest(supplied.encode(), str(expected).encode()):
             self._reply(401, {"error": "unauthorized"})
             return False
         return True
@@ -349,6 +656,11 @@ def state_payload():
             "locked": snap.lock_active(cfg),
             "locked_until": _STATE.get("locked_until"),
             "terminated": bool(_STATE.get("terminated")),
+            "session_started_at": _STATE.get("session_started_at"),
+            "session_age_seconds": round(snap.session_age_seconds(), 1),
+            "stop_failures": int(_STATE.get("stop_failures") or 0),
+            "pending_shutdown": _STATE.get("pending_shutdown"),
+            "last_probe": probe_payload(),
             "state": derive_state(snap, cfg),
             "idle_seconds": round(snap.idle_seconds(cfg), 1),
             "age_seconds": round(snap.age_seconds(), 1),
@@ -496,8 +808,17 @@ def dispatch(path, body):
     if path == "/shutdown":
         action = body.get("action") or ACTION_STOP
         reason = body.get("reason") or "manual"
+        if action not in (ACTION_STOP, ACTION_DESTROY):
+            return 400, {"error": "action must be stop or destroy"}
+        with _LOCK:
+            # Remembered so the guard loop retries it if the provider call fails.
+            _STATE["pending_shutdown"] = {"action": action, "reason": reason}
+            save_state()
         threading.Thread(
-            target=terminate, args=(action, reason, {"requested_by": "cli"}), daemon=True
+            target=terminate,
+            args=(action, reason, {"requested_by": "cli"}),
+            kwargs={"force": True},
+            daemon=True,
         ).start()
         return 202, {"ok": True, "action": action}
 
@@ -531,6 +852,10 @@ def main():
 
     guard = threading.Thread(target=guard_loop, daemon=True)
     guard.start()
+
+    spec = probe_spec()
+    if spec is not None:
+        threading.Thread(target=probe_loop, args=(spec,), daemon=True).start()
 
     log_event("watchdog_listening", port=port)
     try:

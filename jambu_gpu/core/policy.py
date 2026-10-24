@@ -35,6 +35,7 @@ ACTION_DESTROY = "destroy"
 REASON_IDLE = "idle_timeout"
 REASON_MAX_LIFETIME = "max_lifetime"
 REASON_BUDGET = "budget_exceeded"
+REASON_STOPPED_TTL = "stopped_ttl"
 
 
 @dataclass
@@ -74,6 +75,8 @@ class PolicyConfig:
     # Cost guardrails (spec section 17).
     hourly_cost_usd: Optional[float] = None
     max_session_cost_usd: Optional[float] = None
+    # A stopped instance still bills storage; destroy it after this long.
+    stopped_ttl_s: Optional[float] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "PolicyConfig":
@@ -96,6 +99,11 @@ class Snapshot:
     locked: bool = False
     locked_until: Optional[float] = None
     provider_state: str = READY
+    # Start of the current container session. A restarted instance gets a new
+    # one, so max_lifetime and the budget do not kill it the moment it boots.
+    session_started_at: Optional[float] = None
+    # When the provider last reported the instance stopped (CLI side only).
+    stopped_since: Optional[float] = None
 
     # -- derived helpers ----------------------------------------------------
 
@@ -136,6 +144,15 @@ class Snapshot:
 
     def age_seconds(self) -> float:
         return max(0.0, self.now - self.created_at)
+
+    def session_age_seconds(self) -> float:
+        start = self.session_started_at if self.session_started_at is not None else self.created_at
+        return max(0.0, self.now - start)
+
+    def stopped_seconds(self) -> Optional[float]:
+        if self.stopped_since is None:
+            return None
+        return max(0.0, self.now - self.stopped_since)
 
 
 @dataclass
@@ -184,19 +201,33 @@ def evaluate(snapshot: Snapshot, cfg: PolicyConfig) -> Decision:
     detail: dict[str, Any] = {
         "state": derive_state(snapshot, cfg),
         "age_seconds": round(snapshot.age_seconds(), 1),
+        "session_age_seconds": round(snapshot.session_age_seconds(), 1),
         "idle_seconds": round(snapshot.idle_seconds(cfg), 1),
         "pending_workloads": len(snapshot.pending(cfg)),
         "stale_workloads": len(snapshot.stale(cfg)),
         "locked": snapshot.lock_active(cfg),
     }
 
-    if snapshot.provider_state in (STOPPED, DESTROYED):
-        return Decision(ACTION_NONE, "already_terminal", detail)
-
     locked = snapshot.lock_active(cfg)
 
-    # max_lifetime wins over everything except an active lock.
-    if cfg.max_lifetime_s is not None and snapshot.age_seconds() > cfg.max_lifetime_s:
+    if snapshot.provider_state == STOPPED:
+        stopped_for = snapshot.stopped_seconds()
+        if (
+            cfg.stopped_ttl_s is not None
+            and stopped_for is not None
+            and stopped_for > cfg.stopped_ttl_s
+            and cfg.destroy_supported
+            and not locked
+        ):
+            detail["stopped_seconds"] = round(stopped_for, 1)
+            return Decision(ACTION_DESTROY, REASON_STOPPED_TTL, detail)
+        return Decision(ACTION_NONE, "already_terminal", detail)
+    if snapshot.provider_state == DESTROYED:
+        return Decision(ACTION_NONE, "already_terminal", detail)
+
+    # max_lifetime wins over everything except an active lock. Measured per
+    # session: a restart is a deliberate new lease, not a forgotten instance.
+    if cfg.max_lifetime_s is not None and snapshot.session_age_seconds() > cfg.max_lifetime_s:
         if locked:
             return Decision(ACTION_NONE, "locked", detail)
         action = _terminal_action(cfg)
@@ -206,7 +237,7 @@ def evaluate(snapshot: Snapshot, cfg: PolicyConfig) -> Decision:
 
     # Session budget ceiling.
     if cfg.max_session_cost_usd is not None and cfg.hourly_cost_usd:
-        spent = cfg.hourly_cost_usd * snapshot.age_seconds() / 3600.0
+        spent = cfg.hourly_cost_usd * snapshot.session_age_seconds() / 3600.0
         detail["session_cost_usd"] = round(spent, 4)
         if spent > cfg.max_session_cost_usd:
             if locked:

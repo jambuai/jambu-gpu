@@ -155,3 +155,78 @@ def test_terminal_states_are_left_alone():
 )
 def test_derive_state(kwargs, expected):
     assert p.derive_state(snap(**kwargs), cfg()) == expected
+
+
+# --- sessions: a restart is a new lease ------------------------------------
+
+
+def test_session_age_falls_back_to_creation():
+    assert snap(created_at=NOW - 500).session_age_seconds() == 500
+    restarted = snap(created_at=NOW - 500, session_started_at=NOW - 20)
+    assert restarted.session_age_seconds() == 20
+    assert restarted.age_seconds() == 500
+
+
+def test_max_lifetime_is_measured_from_the_session():
+    # Created long ago, restarted a minute ago: must not be killed on boot.
+    restarted = snap(created_at=NOW - 30_000, session_started_at=NOW - 60, workloads=[running(NOW)])
+    assert p.evaluate(restarted, cfg()).action == p.ACTION_NONE
+    forgotten = snap(created_at=NOW - 90_000, session_started_at=NOW - 30_000)
+    decision = p.evaluate(forgotten, cfg())
+    assert decision.reason == p.REASON_MAX_LIFETIME
+    assert decision.detail["session_age_seconds"] == 30_000
+
+
+def test_budget_is_spent_per_session():
+    budget = cfg(hourly_cost_usd=3.0, max_session_cost_usd=5.0)
+    fresh = snap(created_at=NOW - 7_200, session_started_at=NOW - 600)
+    assert p.evaluate(fresh, budget).action == p.ACTION_NONE
+    spent = snap(created_at=NOW - 99_999, session_started_at=NOW - 7_200)
+    decision = p.evaluate(spent, budget)
+    assert decision.reason == p.REASON_BUDGET
+    assert decision.detail["session_cost_usd"] == 6.0
+
+
+# --- stopped instances still bill storage ----------------------------------
+
+
+def stopped(**overrides) -> p.Snapshot:
+    base = dict(provider_state=p.STOPPED, stopped_since=NOW - 7_200)
+    base.update(overrides)
+    return snap(**base)
+
+
+def test_a_long_stopped_instance_is_destroyed():
+    decision = p.evaluate(stopped(), cfg(stopped_ttl_s=3_600.0))
+    assert decision.action == p.ACTION_DESTROY
+    assert decision.reason == p.REASON_STOPPED_TTL == "stopped_ttl"
+    assert decision.detail["stopped_seconds"] == 7_200
+
+
+@pytest.mark.parametrize(
+    "state,config",
+    [
+        (stopped(), cfg()),  # no TTL configured
+        (stopped(stopped_since=None), cfg(stopped_ttl_s=3_600.0)),  # unknown since when
+        (stopped(stopped_since=NOW - 3_000), cfg(stopped_ttl_s=3_600.0)),  # under the TTL
+        (stopped(), cfg(stopped_ttl_s=3_600.0, destroy_supported=False)),
+        (stopped(locked=True, locked_until=NOW + 60), cfg(stopped_ttl_s=3_600.0)),
+        (snap(provider_state=p.DESTROYED, stopped_since=NOW - 7_200), cfg(stopped_ttl_s=1.0)),
+    ],
+)
+def test_stopped_ttl_negatives_stay_terminal(state, config):
+    decision = p.evaluate(state, config)
+    assert decision.action == p.ACTION_NONE
+    assert decision.reason == "already_terminal"
+
+
+def test_stopped_ttl_only_applies_to_stopped_instances():
+    live = snap(stopped_since=NOW - 99_999)
+    assert p.evaluate(live, cfg(stopped_ttl_s=1.0)).action == p.ACTION_NONE
+
+
+def test_policy_config_from_dict_ignores_unknown_keys():
+    config = p.PolicyConfig.from_dict({"stopped_ttl_s": 60.0, "from_the_future": 1})
+    assert config.stopped_ttl_s == 60.0
+    assert p.PolicyConfig().stopped_ttl_s is None
+    assert "stopped_ttl_s" in config.to_dict()
