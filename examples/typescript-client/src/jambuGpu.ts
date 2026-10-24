@@ -27,7 +27,11 @@ export interface GpuOptions {
   config?: string;
   /** The gpu executable. Default: "gpu". */
   bin?: string;
-  /** How long setup may take. A fresh machine boots in ~5-15 min. Default 40 min. */
+  /**
+   * Kill gpu after this long. Default: no limit, because gpu bounds itself:
+   * a fresh machine usually serves in 5-15 min, but each bad host it replaces
+   * can cost up to health.boot_timeout (30 min), compute.host_attempts times.
+   */
   timeoutMs?: number;
 }
 
@@ -64,7 +68,7 @@ function gpu(args: string[], opts: GpuOptions): Promise<string> {
     execFile(
       opts.bin ?? "gpu",
       argv,
-      { cwd: opts.cwd, timeout: opts.timeoutMs ?? 40 * 60_000, maxBuffer: 16 * 1024 * 1024 },
+      { cwd: opts.cwd, timeout: opts.timeoutMs ?? 0, maxBuffer: 16 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
           const code = typeof err.code === "number" ? err.code : null;

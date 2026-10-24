@@ -41,4 +41,4 @@ export async function complete(prompt: string): Promise<string> {
 | `gpuStatus(opts)` | `gpu --json status` |
 | `GpuError`, `EXIT` | Failures carry the CLI's `exitCode` ([codes](../../docs/INTEGRATION.md#exit-codes)) |
 
-`opts` is `{ cwd?, config?, bin?, timeoutMs? }`: where `jambu.yaml` is, or its path, the `gpu` executable, and how long `setup` may take (40 minutes by default).
+`opts` is `{ cwd?, config?, bin?, timeoutMs? }`: where `jambu.yaml` is, or its path, the `gpu` executable, and a limit on how long `setup` may take (none by default: `gpu` bounds itself, see [the lifecycle table](../../docs/INTEGRATION.md#lifecycle-the-app-has-to-expect)).

@@ -44,6 +44,19 @@ The run also found what unit tests could not, and each of these is fixed and cov
 - Ctrl-C did not clean up;
 - a fresh contract was reported `READY`.
 
+### Application integration (0.2.0)
+
+Driven end to end by [`examples/typescript-client`](../examples/typescript-client/) through the OpenAI SDK, on an RTX 3090 with Qwen2.5-0.5B:
+
+| Check | Result |
+| --- | --- |
+| `ensureGpu()` on an empty account | Two bad hosts (weights download cut by the host's network; image pull stalled 30 minutes) were destroyed and replaced; the third served. 37 minutes in all, one instance alive at a time. |
+| The endpoint requires its key | No key: `401`. Wrong key: `401`. The key from `gpu --json setup`: `200`. `/health` without a key: `200`. |
+| Chat through the SDK | Answered. |
+| Healing after a stop | `stopGpu()`, then a call on the stale connection: it failed to connect, `gpu setup` restarted the same instance, and the retry answered 41 s later with the same key. |
+
+It found two more bugs, both fixed and tested: Vast reports a stopping instance as `running` for a few seconds, which made a setup right after a stop skip the restart; and a Vast rate limit (`429`) failed setup instead of being waited out.
+
 ## The MVP command surface
 
 `jambu.yaml` schema, CLI, provider contract, provider registry, Vast.ai adapter,
