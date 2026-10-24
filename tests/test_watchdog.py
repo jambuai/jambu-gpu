@@ -531,16 +531,119 @@ def test_the_guard_survives_a_failed_stop_and_retries(agent_factory):
     assert agent.client.state()["terminated"] is True
 
 
-def test_repeated_stop_failures_escalate_to_destroy(agent_factory):
+def test_stops_failing_past_escalate_after_s_escalate_to_destroy(agent_factory):
     agent = agent_factory(
-        policy(), actions=FLAKY_ACTIONS, env={"JAMBU_TEST_FAIL_STOP": "999"}
+        policy(),
+        actions=FLAKY_ACTIONS,
+        env={"JAMBU_TEST_FAIL_STOP": "999"},
+        escalate_after_s=2.5,
     )
     agent.client.mark_ready()
     assert agent.wait_for_marker(timeout=30)["action"] == "destroy"
-    assert agent.attempted() == ["stop", "stop", "stop", "destroy"]
+    attempts = agent.attempted()
+    assert attempts[-1] == "destroy" and set(attempts[:-1]) == {"stop"}
+    assert len(attempts) >= 3
     trigger = agent.records("lifecycle_guard_triggered")[-1]
     assert trigger["reason"] == "stop_failed_escalation"
     assert trigger["original_reason"] == "idle_timeout"
+
+
+# In-process: the escalation clock, without waiting real minutes.
+
+
+@pytest.fixture
+def inproc(tmp_path, monkeypatch):
+    calls = []
+    failing = {"stop": True}
+
+    def stop(ctx):
+        calls.append("stop")
+        if failing["stop"]:
+            raise RuntimeError("vast 503")
+
+    def destroy(ctx):
+        calls.append("destroy")
+
+    monkeypatch.setattr(agent_body, "STATE_PATH", str(tmp_path / "activity.json"))
+    monkeypatch.setattr(agent_body, "EVENTS_PATH", str(tmp_path / "events.jsonl"))
+    monkeypatch.setattr(agent_body, "provider_stop", stop, raising=False)
+    monkeypatch.setattr(agent_body, "provider_destroy", destroy, raising=False)
+    monkeypatch.setattr(
+        agent_body,
+        "_CONFIG",
+        {"policy": {"idle_timeout_s": 60, "auto_stop": True, "auto_destroy": False}, "interval_s": 60},
+    )
+    monkeypatch.setattr(agent_body, "_STATE", {})
+    agent_body._STATE.update(agent_body.load_state())
+    agent_body._STATE["starting"] = False
+
+    def idle(seconds=3600.0):
+        agent_body._STATE["last_activity"] = time.time() - seconds
+
+    def tick(**_):
+        agent_body.guard_tick(60, False)
+
+    return agent_body, calls, failing, idle, tick
+
+
+def test_an_api_blip_does_not_destroy_the_disk(inproc):
+    """Bug: three failed stops (three minutes of a Vast API outage) destroyed the disk."""
+    agent, calls, _failing, idle, tick = inproc
+    idle()
+    for _ in range(5):
+        tick()
+    assert calls == ["stop"] * 5
+    assert agent._STATE["stop_failing_since"] is not None
+
+
+def test_failures_reset_when_the_instance_is_back_in_use(inproc):
+    """Bug: stop_failures never reset, so failures from separate idle spells,
+    hours apart, added up to an escalation."""
+    agent, calls, _failing, idle, tick = inproc
+    idle()
+    tick()
+    tick()
+    agent._STATE["last_activity"] = time.time()  # the user comes back
+    tick()
+    assert agent._STATE["stop_failures"] == 0 and agent._STATE["stop_failing_since"] is None
+    idle()
+    agent._CONFIG["escalate_after_s"] = 10.0
+    tick()
+    assert calls == ["stop", "stop", "stop"]
+
+
+def test_stops_failing_continuously_for_escalate_after_s_destroy(inproc):
+    agent, calls, _failing, idle, tick = inproc
+    idle()
+    tick()
+    agent._STATE["stop_failing_since"] = time.time() - 1801  # half an hour of 503s
+    tick()
+    assert calls == ["stop", "destroy"]
+    assert agent._STATE["terminated_reason"] == "stop_failed_escalation"
+
+
+def test_no_escalation_without_destroy_support(inproc):
+    agent, calls, _failing, idle, tick = inproc
+    agent._CONFIG["policy"]["destroy_supported"] = False
+    idle()
+    tick()
+    agent._STATE["stop_failing_since"] = time.time() - 7200
+    tick()
+    assert calls == ["stop", "stop"]
+
+
+def test_a_successful_terminate_clears_the_pending_shutdown(inproc):
+    agent, calls, failing, _idle, tick = inproc
+    agent._STATE["pending_shutdown"] = {"action": "stop", "reason": "manual"}
+    tick()
+    assert agent._STATE["pending_shutdown"] is not None  # failed: still to retry
+    failing["stop"] = False
+    agent._STATE["terminated"] = False
+    tick()
+    assert calls == ["stop", "stop"]
+    assert agent._STATE["terminated"] is True
+    assert agent._STATE["pending_shutdown"] is None
+    assert agent._STATE["stop_failures"] == 0
 
 
 def test_no_escalation_when_destroy_is_unsupported(agent_factory):

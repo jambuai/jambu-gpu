@@ -55,7 +55,7 @@ The onstart script sets `JAMBU_SESSION_STARTED_AT=$(date +%s)` once per containe
 
 A failed provider call never disarms the guard. A transient API error is logged as `provider_error`, then `guard_retry` with the attempt count, and the guard tries again on its next tick.
 
-After 3 consecutive failed stops the watchdog destroys the instance instead, if the provider supports destroy (reason `stop_failed_escalation`). A machine that bills forever costs more than a lost disk.
+When stops have failed continuously for `escalate_after_s` (watchdog config, default 30 minutes), the watchdog destroys the instance instead, if the provider supports destroy (reason `stop_failed_escalation`). A machine that bills forever costs more than a lost disk, but a few minutes of provider API outage is not worth the disk. The failure count and clock reset after a successful call and whenever the decision stops being a shutdown (the instance is in use again), so failures from separate idle spells never add up. A completed manual shutdown clears its pending request.
 
 A successful call does not end the loop either. If the provider accepted the call but the machine is still running after `max(300s, 5 × interval)`, the watchdog issues it again (`guard_reissue`). A failed manual `POST /shutdown` is retried the same way.
 
@@ -67,6 +67,8 @@ The watchdog runs inside a bash respawn loop started with `nohup`. If the watchd
 
 A stopped Vast.ai instance still bills for storage, and its watchdog is not running. Set `lifecycle.stopped_ttl` and the policy destroys an instance that has been stopped longer than that (reason `stopped_ttl`). This needs destroy support and no active lock. `gpu guard` enforces it from outside, since nothing runs on a stopped machine.
 
+`stopped_since` keeps the first time the CLI saw the instance stopped, but only while nothing says it ran since. A session start, local activity, watchdog contact or a provider start time newer than `stopped_since` means the instance was restarted and stopped again while the CLI was not looking (from the web console, say), so the clock restarts at the current observation instead of destroying a fresh stop.
+
 ## A second path
 
 Run the same rule from anywhere that has API access:
@@ -75,7 +77,9 @@ Run the same rule from anywhere that has API access:
 */5 * * * * cd /path/to/experiment && gpu guard
 ```
 
-`guard` evaluates the policy against reconciled state and enforces it.
+`guard` evaluates the policy against reconciled state and enforces it. `gpu sweep --install-timer` runs it for every registered project; see [Keeping the account clean](USAGE.md#keeping-the-account-clean).
+
+Inference traffic is counted on the instance only. When the watchdog is enabled and installed but did not answer during this reconcile, `guard` therefore does not apply `idle_timeout`: its local idle clock would stop an endpoint that is busy serving requests. `max_lifetime`, the session budget and `stopped_ttl` still apply, and the decision detail records `idle_skipped: watchdog_unreachable`. With `lifecycle.watchdog.enabled: false` the CLI guard owns the idle rule as before.
 
 ## The watchdog credential
 

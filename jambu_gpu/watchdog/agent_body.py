@@ -63,8 +63,10 @@ _STOPPED = threading.Event()
 _ACTION_LOCK = threading.Lock()
 _PROBE = {}
 
-# Consecutive failed stops before giving up on the disk and destroying.
-STOP_ESCALATION_ATTEMPTS = 3
+# Seconds of continuously failing stops before giving up on the disk and
+# destroying (config key escalate_after_s). Long enough to ride out a provider
+# API outage: losing the disk to a 3-minute blip is worse than 30 more minutes.
+ESCALATE_AFTER_S = 1800.0
 PROBE_ERROR_LOG_EVERY_S = 600.0
 
 
@@ -178,6 +180,7 @@ def _new_session(state, session, now):
             "starting": True,
             "last_activity": now,
             "stop_failures": 0,
+            "stop_failing_since": None,
             "action_failures": 0,
             "pending_shutdown": None,
         }
@@ -290,6 +293,7 @@ def terminate(action, reason, detail=None, force=False):
                 _STATE["action_failures"] = int(_STATE.get("action_failures") or 0) + 1
                 if action == ACTION_STOP:
                     _STATE["stop_failures"] = int(_STATE.get("stop_failures") or 0) + 1
+                    _STATE["stop_failing_since"] = _STATE.get("stop_failing_since") or time.time()
                 save_state()
             log_event(
                 "provider_error",
@@ -304,8 +308,9 @@ def terminate(action, reason, detail=None, force=False):
             _STATE["terminated_at"] = time.time()
             _STATE["terminated_action"] = action
             _STATE["terminated_reason"] = reason
-            _STATE["stop_failures"] = 0
-            _STATE["action_failures"] = 0
+            _reset_failures()
+            # Done: a pending request must not be replayed after a restart.
+            _STATE["pending_shutdown"] = None
             save_state()
         return True
     finally:
@@ -319,7 +324,13 @@ def reissue_after_s(interval):
     return max(300.0, 5.0 * interval)
 
 
-def _choose(decision, cfg):
+def _reset_failures():
+    _STATE["stop_failures"] = 0
+    _STATE["stop_failing_since"] = None
+    _STATE["action_failures"] = 0
+
+
+def _choose(decision, cfg, now=None):
     """(action, reason, pre-escalation reason) to attempt this tick, or None."""
     action, reason = None, None
     pending = _STATE.get("pending_shutdown")
@@ -330,10 +341,18 @@ def _choose(decision, cfg):
     elif decision.terminates:
         action, reason = decision.action, decision.reason
     if action is None:
+        # Back in use: failures from an earlier idle spell must not count
+        # towards destroying the disk later.
+        if _STATE.get("stop_failures") or _STATE.get("action_failures"):
+            _reset_failures()
+            save_state()
         return None
+    since = _STATE.get("stop_failing_since")
+    limit = float(_CONFIG.get("escalate_after_s") or ESCALATE_AFTER_S)
     if (
         action == ACTION_STOP
-        and int(_STATE.get("stop_failures") or 0) >= STOP_ESCALATION_ATTEMPTS
+        and since
+        and (now or time.time()) - float(since) >= limit
         and cfg.destroy_supported
     ):
         # Billing forever is worse than losing the disk.
