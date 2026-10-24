@@ -41,6 +41,12 @@ def map_state(raw: dict[str, Any]) -> InstanceState:
     if "error" in status_msg or "failed" in status_msg:
         return InstanceState.FAILED
 
+    # A stop was requested: the container keeps reporting `running` for a
+    # while as it goes down. Calling that READY made a setup right after a
+    # stop skip the restart and then watch the machine die under it.
+    if intended == "stopped" or cur == "stopped":
+        return InstanceState.STOPPED
+
     # cur_state is the contract's intent; until Vast reports the container's
     # own status, a "running" contract is still being scheduled or pulled.
     if not actual and cur == "running":

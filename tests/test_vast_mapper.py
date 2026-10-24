@@ -231,3 +231,14 @@ def test_a_contract_without_container_status_is_not_ready_yet():
     """Caught live: right after create Vast reports cur_state running, no actual_status."""
     raw = {"cur_state": "running", "intended_status": "running", "actual_status": None}
     assert mapper.map_state(raw) is InstanceState.PROVISIONING
+
+
+def test_a_stopping_container_that_still_reports_running_is_stopped():
+    # Seen live: seconds after a stop request Vast still says actual=running.
+    stopping = {"actual_status": "running", "cur_state": "stopped", "intended_status": "stopped"}
+    assert mapper.map_state(stopping) is InstanceState.STOPPED
+    assert mapper.map_state({"actual_status": "running", "intended_status": "stopped"}) is InstanceState.STOPPED
+
+
+def test_a_running_contract_is_still_ready():
+    assert mapper.map_state({"actual_status": "running", "cur_state": "running", "intended_status": "running", "public_ipaddr": "1.2.3.4"}) is InstanceState.READY
