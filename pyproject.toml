@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jambu-gpu"
-version = "0.2.0"
+version = "0.3.0"
 description = "Provider-agnostic CLI for provisioning and managing temporary GPU runtimes"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,7 +36,7 @@ gpu = "jambu_gpu.cli.main:main"
 packages = ["jambu_gpu"]
 
 [tool.hatch.build.targets.sdist]
-exclude = ["/.env", "/.venv", "/.jambu"]
+exclude = ["/.env", "/.venv", "/.gpu", "/.jambu"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

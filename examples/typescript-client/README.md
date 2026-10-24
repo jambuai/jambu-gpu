@@ -6,7 +6,7 @@ Any Node/TypeScript application using a GPU that `gpu` rents and guards, through
 
 ## Run it
 
-From the directory that holds `jambu.yaml` and `VAST_API_KEY` (in `.env` or the environment), with `jambu-gpu` 0.2.0 or later on `PATH`:
+From the directory that holds `jambu.yaml` and `VAST_API_KEY` (in `.env` or the environment), with `jambu-gpu` 0.3.0 or later on `PATH`:
 
 ```bash
 npm --prefix examples/typescript-client install

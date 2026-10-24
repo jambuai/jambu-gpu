@@ -11,7 +11,7 @@ from jambu_gpu.core.state import RuntimeState, StateStore, WorkloadRecord, utc_n
 
 @pytest.fixture
 def store(tmp_path) -> StateStore:
-    return StateStore(tmp_path / ".jambu")
+    return StateStore(tmp_path / ".gpu")
 
 
 def test_empty_state_is_not_an_error(store):

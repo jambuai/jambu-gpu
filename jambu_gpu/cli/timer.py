@@ -1,9 +1,9 @@
 """systemd *user* units that run `gpu sweep --apply` on a timer.
 
 One ``ExecStart`` covers every project: the sweep guards each project in
-``$JAMBU_HOME/projects.json`` with its own config, so the unit does not depend
+``$GPU_HOME/projects.json`` with its own config, so the unit does not depend
 on its working directory. A user unit needs no root, but it does not inherit
-the shell's environment: credentials must live in ``~/.jambu/credentials`` or
+the shell's environment: credentials must live in ``~/.gpu/credentials`` or
 the project ``.env``. Writing the files is all this module does; enabling them
 is left to the printed ``systemctl`` command.
 """
@@ -64,7 +64,7 @@ def render_units(
         f"TimeoutStartSec={START_TIMEOUT}",
     ]
     if jambu_home:
-        lines.append(_environment("JAMBU_HOME", jambu_home))
+        lines.append(_environment("GPU_HOME", jambu_home))
     # No "-" prefix: a failing sweep must show up as a failed unit.
     lines.append("ExecStart=" + " ".join(_quote(a) for a in [python, "-m", "jambu_gpu", "sweep", "--apply"]))
     lines.append("")
@@ -115,7 +115,9 @@ def install_timer(every_s: float, python: Optional[str] = None) -> dict:
     service_path, timer_path = unit_paths()
     legacy = legacy_guard_configs(service_path)
     service, timer = render_units(
-        every_s=every_s, python=python, jambu_home=os.environ.get("JAMBU_HOME") or None
+        every_s=every_s,
+        python=python,
+        jambu_home=os.environ.get("GPU_HOME") or os.environ.get("JAMBU_HOME") or None,
     )
     service_path.parent.mkdir(parents=True, exist_ok=True)
     service_path.write_text(service)

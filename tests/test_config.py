@@ -100,7 +100,7 @@ def test_fingerprint_tracks_runtime_identity(write_config):
 
 
 def test_state_dir_sits_next_to_the_config(config):
-    assert config.state_dir == config.source_path.parent / ".jambu"
+    assert config.state_dir == config.source_path.parent / ".gpu"
 
 
 # -- jambu.yaml shared-manifest namespacing ----------------------------------

@@ -118,7 +118,7 @@ def fmt_money(value: Optional[float], suffix: str = "") -> Optional[str]:
 
 
 def register_project(context: Context) -> None:
-    """Put this project in $JAMBU_HOME/projects.json so `gpu sweep` guards it.
+    """Put this project in $GPU_HOME/projects.json so `gpu sweep` guards it.
 
     Done before provisioning: a setup that dies halfway must still leave an
     instance the sweep judges by this project's policy, not as an orphan.

@@ -57,7 +57,7 @@ class Account:
 
 
 def account_credentials(project_dir: Path, profile: str = "default") -> CredentialResolver:
-    """The environment, ./.env, ~/.jambu/credentials, then registered projects' .env.
+    """The environment, ./.env, ~/.gpu/credentials, then registered projects' .env.
 
     The timer runs from ~ without the shell's environment; a key kept only in
     a project's .env must still reach the account-wide orphan sweep.
@@ -196,7 +196,7 @@ def _require_file_credentials(context: Context) -> None:
             raise ConfigError(
                 f"{name} is {where}, so the timer could not use it for {who}: a systemd "
                 f"user unit does not inherit your shell. Put `{name}=...` in "
-                "~/.jambu/credentials (chmod 600), then re-run --install-timer."
+                "~/.gpu/credentials (chmod 600), then re-run --install-timer."
             )
 
 

@@ -4,7 +4,7 @@ The watchdog guards one instance from the inside and `gpu guard` guards the
 one instance a project tracks. The sweep covers every project on this machine
 and whatever is left over:
 
-- every project registered in ``$JAMBU_HOME/projects.json`` (by `gpu setup`)
+- every project registered in ``$GPU_HOME/projects.json`` (by `gpu setup`)
   gets its own ``Engine.guard_tick``, with its own config and state: its own
   max_lifetime, lock, session and stopped_ttl. Those instances are *tracked*;
 - an instance no project tracks is an *orphan*. Nobody knows its policy or
@@ -14,7 +14,7 @@ and whatever is left over:
   ago is destroyed.
 
 Providers do not report when an instance stopped, so the first time the sweep
-saw each orphan stopped is kept in ``$JAMBU_HOME/sweep.json``.
+saw each orphan stopped is kept in ``$GPU_HOME/sweep.json``.
 """
 
 from __future__ import annotations
@@ -30,7 +30,8 @@ from typing import Any, Callable, Iterator, Optional
 
 from . import events as ev
 from . import policy
-from .config import STATE_DIRNAME, load_config
+from .config import load_config
+from .paths import gpu_home, project_state_dir
 from .errors import JambuError, ProviderError
 from .events import EventLog
 from .models import Instance, InstanceState, is_jambu_label
@@ -46,8 +47,7 @@ SWEEP_ACTION = "sweep_action"
 
 
 def jambu_home() -> Path:
-    override = os.environ.get("JAMBU_HOME")
-    return Path(override).expanduser() if override else Path.home() / ".jambu"
+    return gpu_home()
 
 
 class SweepRegistry:
@@ -198,7 +198,7 @@ class ProjectGuard:
 
 def _state_beside(config_path: Path) -> Optional[RuntimeState]:
     """The project's state read straight from disk (no API call)."""
-    store = StateStore(Path(config_path).parent / STATE_DIRNAME)
+    store = StateStore(project_state_dir(Path(config_path).parent))
     try:
         return store.load() if store.exists() else None
     except JambuError:

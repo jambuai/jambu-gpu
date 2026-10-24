@@ -1,7 +1,7 @@
 """Credential resolution (spec section 5).
 
 Credentials never live in jambu.yaml. They are resolved from, in order:
-environment variables, a project-local ``.env``, then ``~/.jambu/credentials``.
+environment variables, a project-local ``.env``, then ``~/.gpu/credentials``.
 The resolution strategy can grow (keychain, secret managers, CI secrets)
 without touching jambu.yaml or any adapter.
 """
@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Optional
+
+from .paths import gpu_home
 
 _DOTENV_CACHE: dict[Path, dict[str, str]] = {}
 
@@ -46,7 +48,7 @@ class CredentialResolver:
         self.profile = profile
         self.sources: list[tuple[str, Path]] = [
             ("project .env", self.project_dir / ".env"),
-            ("user credentials", Path.home() / ".jambu" / "credentials"),
+            ("user credentials", gpu_home() / "credentials"),
             *(extra_sources or []),
         ]
 

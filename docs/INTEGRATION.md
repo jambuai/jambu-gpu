@@ -15,16 +15,17 @@ The app never has to stop the GPU. The watchdog on the machine stops it once not
 pipx install jambu-gpu            # or: uv tool install jambu-gpu / pip install jambu-gpu
 cd /srv/my-app                    # the directory the app runs gpu from
 gpu init --model Qwen/Qwen2.5-7B-Instruct
-echo "VAST_API_KEY=..." >> .env   # or export it, or ~/.jambu/credentials
+echo "VAST_API_KEY=..." >> .env   # or export it, or ~/.gpu/credentials
 gpu validate                      # fails here, not in production, on a bad config
 gpu sweep --install-timer         # optional safety net, see USAGE.md
 ```
 
 Requirements:
 
-- `jambu-gpu` 0.2.0 or later, on Python 3.10+. The app can be in any language.
-- The directory holding `jambu.yaml` must be **persistent**. `gpu` keeps what it rented in `.jambu/state.json` next to it. In a container, mount it as a volume: a container that loses `.jambu/` forgets its instance, rents a second one, and leaves the first to the watchdog and the sweep.
-- `.jambu/state.json` holds the endpoint key and the watchdog token. It is written `0600`. Add `.jambu/` and `.env` to `.gitignore` and keep them out of images.
+- `jambu-gpu` 0.3.0 or later, on Python 3.10+. The app can be in any language.
+- The directory holding `jambu.yaml` must be **persistent**. `gpu` keeps what it rented in `.gpu/state.json` next to it. In a container, mount it as a volume: a container that loses `.gpu/` forgets its instance, rents a second one, and leaves the first to the watchdog and the sweep.
+- Before 0.3.0 these directories were `.jambu/` and `~/.jambu`. The first command after an upgrade renames them, so an instance already rented is kept, not rented again.
+- `.gpu/state.json` holds the endpoint key and the watchdog token. It is written `0600`. Add `.gpu/` and `.env` to `.gitignore` and keep them out of images.
 
 Tune the lifecycle in `jambu.yaml` for the app. For a service with bursty traffic, a longer idle timeout avoids paying a restart on every burst:
 
@@ -218,7 +219,7 @@ Run `gpu --json setup` as a subprocess, parse the JSON, and point the language's
 - **The endpoint requires a key.** Unless `runtime.api_key` is set, `setup` generates one per machine (43 random URL-safe characters) and starts vLLM with it. Requests without it get `401`. `/health` and `/metrics` stay open: they reveal no data and the watchdog reads `/metrics`. Instances provisioned before this existed run without a key until they are recreated.
 - **The endpoint is plain HTTP** on a public IP and port. The key and the prompts travel unencrypted. For sensitive data, put the app and the GPU on a private network or a tunnel, or front the endpoint with a TLS proxy.
 - **The watchdog holds the provider key** on the instance so it can stop its own machine. A restricted key is the safer choice; see [LIFECYCLE.md](LIFECYCLE.md).
-- `jambu.yaml` never holds credentials. `.env` and `.jambu/` do not belong in version control.
+- `jambu.yaml` never holds credentials. `.env` and `.gpu/` do not belong in version control.
 
 ## 6. Troubleshooting
 

@@ -549,8 +549,8 @@ def home(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def credentials_file(home):
-    path = home / ".jambu" / "credentials"
+def credentials_file(home, jambu_home):
+    path = jambu_home / "credentials"
     path.parent.mkdir(parents=True)
     path.write_text("VAST_API_KEY=from-file\n")
     return path
@@ -570,7 +570,7 @@ def test_install_timer_writes_one_unit_independent_of_the_project(
     assert execs == [f"ExecStart={sys.executable} -m jambu_gpu sweep --apply"]  # no "-"
     assert "WorkingDirectory=~" in service
     assert "TimeoutStartSec=10min" in service
-    assert f'Environment="JAMBU_HOME={jambu_home}"' in service
+    assert f'Environment="GPU_HOME={jambu_home}"' in service
     assert "Type=oneshot" in service
     assert "OnUnitActiveSec=600s" in timer
     assert "WantedBy=timers.target" in timer
@@ -623,7 +623,7 @@ def test_install_timer_refuses_a_key_only_in_the_shell_environment(config, home,
     result = runner.invoke(app, ["sweep", "--install-timer"])
     assert result.exit_code == 2
     message = " ".join(result.output.split())
-    assert "~/.jambu/credentials" in message and "VAST_API_KEY" in message
+    assert "~/.gpu/credentials" in message and "VAST_API_KEY" in message
     assert not (home / ".config/systemd/user/jambu-gpu-sweep.service").exists()
 
 
@@ -641,7 +641,7 @@ def test_unit_values_escape_percent_and_dollar_and_quote_spaces():
         every_s=300, python="/opt/my env/100%/py$thon", jambu_home="/data/50% \"x\""
     )
     assert 'ExecStart="/opt/my env/100%%/py$$thon" -m jambu_gpu sweep --apply' in service
-    assert 'Environment="JAMBU_HOME=/data/50%% \\"x\\""' in service
+    assert 'Environment="GPU_HOME=/data/50%% \\"x\\""' in service
     assert "Environment" not in timer_mod.render_units(every_s=300, python="/p")[0]
 
 

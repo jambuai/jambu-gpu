@@ -2,7 +2,7 @@
 
 A host that could not pull the image or reach the network fails the next
 setup the same way, and the cheapest-offer search keeps picking it. Each
-failure is kept for ``BAD_HOST_TTL_S`` in ``$JAMBU_HOME/bad_hosts.json``.
+failure is kept for ``BAD_HOST_TTL_S`` in ``$GPU_HOME/bad_hosts.json``.
 """
 
 from __future__ import annotations

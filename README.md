@@ -26,7 +26,7 @@ From an application in any language: `gpu --json setup` returns the OpenAI-compa
 
 As a last line of defense, `gpu ls` shows every jambu instance in the account and `gpu sweep --install-timer` sets up a systemd user timer that guards every project on the machine by its own rules and cleans up the orphans no project tracks. See [Keeping the account clean](docs/USAGE.md#keeping-the-account-clean).
 
-The API key is read from the environment, a project `.env`, or `~/.jambu/credentials`. It never goes in the manifest.
+The API key is read from the environment, a project `.env`, or `~/.gpu/credentials`. It never goes in the manifest.
 
 ## Declare
 

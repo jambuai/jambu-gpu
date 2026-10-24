@@ -29,9 +29,10 @@ BASE_CONFIG = {
 
 @pytest.fixture(autouse=True)
 def jambu_home(tmp_path, monkeypatch):
-    """Keep the project registry and sweep state out of the real ~/.jambu."""
-    home = tmp_path / "jambu-home"
-    monkeypatch.setenv("JAMBU_HOME", str(home))
+    """Keep the project registry and sweep state out of the real ~/.gpu."""
+    home = tmp_path / "gpu-home"
+    monkeypatch.setenv("GPU_HOME", str(home))
+    monkeypatch.delenv("JAMBU_HOME", raising=False)
     return home
 
 

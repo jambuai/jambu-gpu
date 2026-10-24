@@ -33,12 +33,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .durations import parse_duration
 from .errors import ConfigError
+from .paths import project_state_dir
 
 # jambu.yaml (namespaced, shared with other Jambu Lab tools) is searched
 # first; config.yml (flat, gpu-runtime-only) is the legacy fallback.
 CONFIG_FILENAMES = ("jambu.yaml", "jambu.yml", "config.yml", "config.yaml")
 GPU_RUNTIME_KEY = "gpu_runtime"
-STATE_DIRNAME = ".jambu"
 
 # The model catalog (spec: "Choosing a model" doc) - a project's jambu.yaml
 # references one entry by name instead of redeclaring the whole model/compute/
@@ -319,7 +319,7 @@ class RuntimeConfig(_Base):
 
     @property
     def state_dir(self) -> Path:
-        return self.project_dir / STATE_DIRNAME
+        return project_state_dir(self.project_dir)
 
     def fingerprint(self) -> str:
         """Identity of the *desired* runtime.

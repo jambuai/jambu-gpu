@@ -1,6 +1,6 @@
 """Structured lifecycle events (spec section 24).
 
-Every lifecycle action appends one JSON object to ``.jambu/logs/events.jsonl``
+Every lifecycle action appends one JSON object to ``.gpu/logs/events.jsonl``
 so unexpected GPU cost can always be traced back to a decision and a reason.
 """
 

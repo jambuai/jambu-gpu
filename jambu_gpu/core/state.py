@@ -1,6 +1,6 @@
 """Observed runtime state (spec section 9).
 
-jambu.yaml is the desired-state SoT; ``.jambu/state.json`` is what we last
+jambu.yaml is the desired-state SoT; ``.gpu/state.json`` is what we last
 observed. This module owns reading/writing it atomically, plus the on-disk
 process lock that keeps two CLI invocations from provisioning twice.
 """
@@ -312,7 +312,7 @@ class RuntimeState:
 
 
 class StateStore:
-    """Atomic reader/writer for ``.jambu/state.json``."""
+    """Atomic reader/writer for ``.gpu/state.json``."""
 
     def __init__(self, state_dir: Path) -> None:
         self._depth = 0  # flock is per-open-file-description: keep it reentrant

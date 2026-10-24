@@ -62,9 +62,9 @@ job queues, a web dashboard. See [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md).
 
 ## Secrets
 
-Never commit credentials, `.env`, `.jambu/state.json`, or provider instance
+Never commit credentials, `.env`, `.gpu/state.json`, or provider instance
 ids from a real run. Keys are read from the environment, a gitignored `.env`,
-or `~/.jambu/credentials`. `.env.example` ships with empty values only.
+or `~/.gpu/credentials`. `.env.example` ships with empty values only.
 
 ## Pull requests
 

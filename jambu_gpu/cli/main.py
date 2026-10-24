@@ -19,7 +19,7 @@ app = typer.Typer(
     name="gpu",
     help=(
         "Provider-agnostic CLI for provisioning and managing temporary GPU runtimes.\n\n"
-        "jambu.yaml is the desired-state source of truth; .jambu/state.json is what "
+        "jambu.yaml is the desired-state source of truth; .gpu/state.json is what "
         "was last observed."
     ),
     no_args_is_help=True,

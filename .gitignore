@@ -5,6 +5,7 @@ venv/
 dist/
 build/
 *.egg-info/
+.gpu/
 .jambu/
 .env
 .env.*

@@ -105,7 +105,7 @@ gpu
     │
     ├── Lifecycle    core/policy.py     the only shutdown rule
     ├── Runtime      runtime/vllm.py    how the model runs
-    └── State        core/state.py      .jambu/state.json
+    └── State        core/state.py      .gpu/state.json
                 │
         Provider contract   providers/base.py
                 │
