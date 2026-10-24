@@ -25,7 +25,7 @@ Eighteen guarantees, mapped to the code and the test that holds each one.
 
 ## Validated on real hardware
 
-On 2026-10-24 the lifecycle ran end to end on Vast.ai (RTX 3090, Qwen2.5-0.5B, `idle_timeout: 4m`, `stopped_ttl: 5m`), for about $1.20 in total across every attempt:
+On 2026-10-24 the lifecycle ran end to end on Vast.ai (RTX 3090, Qwen2.5-0.5B, `idle_timeout: 4m`, `stopped_ttl: 5m`), for $0.35 of Vast credit in total across every attempt:
 
 | What was checked | What happened |
 | --- | --- |
