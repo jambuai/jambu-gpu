@@ -41,6 +41,11 @@ def map_state(raw: dict[str, Any]) -> InstanceState:
     if "error" in status_msg or "failed" in status_msg:
         return InstanceState.FAILED
 
+    # cur_state is the contract's intent; until Vast reports the container's
+    # own status, a "running" contract is still being scheduled or pulled.
+    if not actual and cur == "running":
+        return InstanceState.PROVISIONING
+
     for value in (actual, cur):
         if value in _STATE_MAP:
             state = _STATE_MAP[value]

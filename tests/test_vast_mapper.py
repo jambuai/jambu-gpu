@@ -225,3 +225,9 @@ def test_find_offers_drops_excluded_machines_even_if_the_server_returns_them(mon
     spec = _spec()
     spec.exclude_hosts = ["4242"]
     assert [(o.id, o.host_id) for o in provider.find_offers(spec)] == [("2", "77")]
+
+
+def test_a_contract_without_container_status_is_not_ready_yet():
+    """Caught live: right after create Vast reports cur_state running, no actual_status."""
+    raw = {"cur_state": "running", "intended_status": "running", "actual_status": None}
+    assert mapper.map_state(raw) is InstanceState.PROVISIONING

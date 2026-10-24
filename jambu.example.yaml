@@ -76,7 +76,7 @@ gpu_runtime:
 
   health:
     interval: 60s
-    boot_timeout: 15m
+    boot_timeout: 30m
     startup_timeout: 10m
     path: /health
 

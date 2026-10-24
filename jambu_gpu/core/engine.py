@@ -527,7 +527,9 @@ class Engine:
                     )
                     self._fail_setup(state, final)
                     raise final from exc
-                except JambuError as exc:
+                except (JambuError, KeyboardInterrupt) as exc:
+                    # Ctrl-C included: nobody is left to use the machine this
+                    # setup was renting, so it must not stay booting on the bill.
                     self._fail_setup(state, exc)
                     raise
             raise AssertionError("unreachable: the last attempt returns or raises")
@@ -643,7 +645,7 @@ class Engine:
             excluded.append(host_id)
         return True
 
-    def _fail_setup(self, state: RuntimeState, exc: JambuError) -> None:
+    def _fail_setup(self, state: RuntimeState, exc: BaseException) -> None:
         cfg = self.config
         self.events.emit(ev.SETUP_FAILED, error=str(exc), error_type=type(exc).__name__)
         if cfg.lifecycle.cleanup_on_setup_failure and state.instance_id:

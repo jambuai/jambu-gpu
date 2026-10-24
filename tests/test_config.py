@@ -362,13 +362,13 @@ def test_the_example_manifest_loads_with_the_new_fields():
     loaded = load_config(example)
     assert loaded.stopped_ttl_s == 24 * 3600
     assert loaded.lifecycle.traffic_counts_as_activity is True
-    assert loaded.boot_timeout_s == 15 * 60
+    assert loaded.boot_timeout_s == 30 * 60
     assert loaded.compute.host_attempts == 3
 
 
 def test_boot_and_startup_timeouts_are_separate(write_config):
     defaults = write_config()
-    assert defaults.boot_timeout_s == 15 * 60
+    assert defaults.boot_timeout_s == 30 * 60
     assert defaults.startup_timeout_s == 10 * 60
     custom = write_config(health={"boot_timeout": "30m", "startup_timeout": "25m"})
     assert (custom.boot_timeout_s, custom.startup_timeout_s) == (1800.0, 1500.0)

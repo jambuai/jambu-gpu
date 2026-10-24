@@ -224,7 +224,7 @@ class LifecycleConfig(_Base):
 class HealthConfig(_Base):
     interval: str = "60s"
     # How long the machine may take to reach running (mostly the image pull).
-    boot_timeout: str = "15m"
+    boot_timeout: str = "30m"
     # How long the model server may then take to answer its health check.
     startup_timeout: str = "10m"
     path: str = "/health"
@@ -303,7 +303,7 @@ class RuntimeConfig(_Base):
 
     @property
     def boot_timeout_s(self) -> float:
-        return parse_duration(self.health.boot_timeout) or 900.0
+        return parse_duration(self.health.boot_timeout) or 1800.0
 
     @property
     def startup_timeout_s(self) -> float:
@@ -573,7 +573,7 @@ gpu_runtime:
 
   health:
     interval: 60s
-    boot_timeout: 15m
+    boot_timeout: 30m
     startup_timeout: 10m
 
   budget:
@@ -622,7 +622,7 @@ lifecycle:
 
 health:
   interval: 60s
-  boot_timeout: 15m
+  boot_timeout: 30m
   startup_timeout: 10m
 
 budget:

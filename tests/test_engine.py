@@ -111,6 +111,20 @@ def test_failed_setup_cleans_up_partially_created_resources(engine):
     assert engine.store.load().instance_id is None
 
 
+def test_an_interrupted_setup_does_not_leave_the_machine_billing(engine, monkeypatch):
+    """Caught live: Ctrl-C during the image pull left the instance booting."""
+
+    def interrupted(state=None):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(engine, "ensure_ready", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        engine.setup()
+
+    assert engine.provider.instances == {}
+    assert engine.store.load().instance_id is None
+
+
 def test_cleanup_can_be_disabled(write_config):
     config = write_config(lifecycle={"cleanup_on_setup_failure": False})
     engine = make_engine(config)
@@ -694,5 +708,5 @@ def test_the_remote_startup_grace_covers_the_boot_and_the_model_server(write_con
         blob = re.search(r"echo (\S+) > /etc/jambu/watchdog.json.b64", script).group(1)
         return json.loads(zlib.decompress(base64.b64decode(blob)))["startup_grace_s"]
 
-    assert grace() == 15 * 60 + 10 * 60 + 300  # boot_timeout 15m by default
+    assert grace() == 30 * 60 + 10 * 60 + 300  # boot_timeout 30m by default
     assert grace(boot_timeout="20m", startup_timeout="5m") == 20 * 60 + 5 * 60 + 300
