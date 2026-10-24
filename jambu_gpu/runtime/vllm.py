@@ -157,6 +157,16 @@ class VllmRuntime(ModelRuntime):
             f">> {LOG_PATH} 2>&1 & echo $! > /var/run/jambu/vllm.pid"
         )
 
+    def activity_probe(self) -> dict:
+        # The watchdog runs in the same container, so loopback reaches vLLM
+        # without the public port. /metrics is served even with --api-key.
+        return {
+            "kind": "prometheus",
+            "url": f"http://127.0.0.1:{self.config.runtime.port}/metrics",
+            "gauges": ["vllm:num_requests_running", "vllm:num_requests_waiting"],
+            "counters": ["vllm:request_success_total", "vllm:prompt_tokens_total"],
+        }
+
     def validate(self) -> ValidationResult:
         result = ValidationResult()
         cfg = self.config

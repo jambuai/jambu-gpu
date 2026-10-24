@@ -24,6 +24,15 @@ from .policy import (
 )
 
 
+# Every instance this tool creates carries a label with this prefix. It is how
+# account-wide commands tell our instances from everything else in the account.
+JAMBU_LABEL_PREFIX = "jambu-"
+
+
+def is_jambu_label(label: Optional[str]) -> bool:
+    return bool(label) and str(label).startswith(JAMBU_LABEL_PREFIX)
+
+
 class InstanceState(str, Enum):
     PROVISIONING = PROVISIONING
     STARTING = STARTING
@@ -69,6 +78,8 @@ class ProviderCapabilities:
     logs: bool = False
     # False when a stopped instance still costs money (spec section 25).
     stop_eliminates_billing: bool = True
+    # Can enumerate this tool's instances account-wide (`gpu ls`, `gpu sweep`).
+    list_instances: bool = False
 
     def as_row(self) -> dict[str, str]:
         return {k: ("yes" if v else "no") for k, v in self.__dict__.items()}

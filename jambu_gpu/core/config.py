@@ -184,6 +184,12 @@ class LifecycleConfig(_Base):
     heartbeat_interval: str = "30s"
     heartbeat_grace: str = "5m"
     ssh_counts_as_activity: bool = False
+    # Requests served by the model runtime count as activity, so an endpoint
+    # in active use by something other than `gpu run` is not idled out.
+    traffic_counts_as_activity: bool = True
+    # How long an instance may sit STOPPED before it is destroyed. Matters
+    # where a stopped instance still bills (storage); null keeps it forever.
+    stopped_ttl: Optional[str] = "24h"
     lock: LockConfig = Field(default_factory=LockConfig)
     watchdog: WatchdogConfig = Field(default_factory=WatchdogConfig)
 
@@ -191,6 +197,7 @@ class LifecycleConfig(_Base):
     _v_idle = _duration("idle_timeout")
     _v_hb = _duration("heartbeat_interval")
     _v_grace = _duration("heartbeat_grace")
+    _v_stopped_ttl = _duration("stopped_ttl")
 
     @model_validator(mode="after")
     def _sane(self) -> "LifecycleConfig":
@@ -259,6 +266,10 @@ class RuntimeConfig(_Base):
     @property
     def max_lifetime_s(self) -> Optional[float]:
         return parse_duration(self.lifecycle.max_lifetime)
+
+    @property
+    def stopped_ttl_s(self) -> Optional[float]:
+        return parse_duration(self.lifecycle.stopped_ttl)
 
     @property
     def heartbeat_interval_s(self) -> float:
@@ -529,8 +540,10 @@ gpu_runtime:
   lifecycle:
     max_lifetime: 6h
     idle_timeout: 15m
+    stopped_ttl: 24h
     auto_stop: true
     auto_destroy: false
+    traffic_counts_as_activity: true
     cleanup_on_setup_failure: true
     allow_indefinite_lock: false
     lock:
@@ -575,8 +588,10 @@ runtime:
 lifecycle:
   max_lifetime: 6h
   idle_timeout: 15m
+  stopped_ttl: 24h
   auto_stop: true
   auto_destroy: false
+  traffic_counts_as_activity: true
   cleanup_on_setup_failure: true
   allow_indefinite_lock: false
   lock:

@@ -320,3 +320,45 @@ def test_lifecycle_and_budget_still_do_not_affect_the_fingerprint(write_config):
         budget={"max_hourly_cost_usd": 5.0},
     )
     assert changed.fingerprint() == base.fingerprint()
+
+
+def test_stopped_ttl_defaults_to_a_day_and_null_disables_it(write_config):
+    assert write_config().stopped_ttl_s == 24 * 3600
+    assert write_config(lifecycle={"stopped_ttl": "2h"}).stopped_ttl_s == 7200
+    assert write_config(lifecycle={"stopped_ttl": None}).stopped_ttl_s is None
+
+
+def test_stopped_ttl_must_be_a_duration(write_config):
+    with pytest.raises(ConfigError) as exc:
+        write_config(lifecycle={"stopped_ttl": "tomorrow"})
+    assert "stopped_ttl" in str(exc.value)
+
+
+def test_traffic_counts_as_activity_by_default(write_config):
+    assert write_config().lifecycle.traffic_counts_as_activity is True
+    assert (
+        write_config(lifecycle={"traffic_counts_as_activity": False})
+        .lifecycle.traffic_counts_as_activity
+        is False
+    )
+
+
+def test_init_templates_spell_out_the_new_lifecycle_defaults():
+    import yaml
+
+    from jambu_gpu.core.config import DEFAULT_CONFIG_TEMPLATE, DEFAULT_CONFIG_TEMPLATE_FLAT
+
+    nested = yaml.safe_load(DEFAULT_CONFIG_TEMPLATE.format(model_id="org/m"))["gpu_runtime"]
+    flat = yaml.safe_load(DEFAULT_CONFIG_TEMPLATE_FLAT.format(model_id="org/m"))
+    for doc in (nested, flat):
+        assert doc["lifecycle"]["stopped_ttl"] == "24h"
+        assert doc["lifecycle"]["traffic_counts_as_activity"] is True
+
+
+def test_the_example_manifest_loads_with_the_new_fields():
+    from pathlib import Path
+
+    example = Path(__file__).resolve().parents[1] / "jambu.example.yaml"
+    loaded = load_config(example)
+    assert loaded.stopped_ttl_s == 24 * 3600
+    assert loaded.lifecycle.traffic_counts_as_activity is True

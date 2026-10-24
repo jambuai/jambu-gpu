@@ -142,6 +142,14 @@ class RuntimeState:
     # periods (e.g. before a stop); `running_since` marks an open one.
     billed_seconds: float = 0.0
     running_since: Optional[float] = None
+    # A session is one continuous running period of the instance: it starts
+    # at creation and again at every restart. max_lifetime and the session
+    # budget are measured from here, so a restarted instance gets a fresh
+    # bound instead of being killed for the hours it spent stopped.
+    session_started_at: Optional[float] = None
+    # When the instance was first observed STOPPED; drives lifecycle.stopped_ttl
+    # on providers where a stopped instance still bills (storage).
+    stopped_since: Optional[float] = None
     instance: Optional[Instance] = None
     workloads: dict[str, WorkloadRecord] = field(default_factory=dict)
     watchdog: WatchdogInfo = field(default_factory=WatchdogInfo)
@@ -179,6 +187,15 @@ class RuntimeState:
             self.billed_seconds += max(0.0, now - self.running_since)
             self.running_since = None
 
+    def mark_stopped(self, now: Optional[float] = None) -> None:
+        """Record that the instance is (still) stopped; keeps the earliest time."""
+        if self.stopped_since is None:
+            self.stopped_since = now if now is not None else utc_now()
+
+    def mark_session_start(self, now: Optional[float] = None) -> None:
+        self.session_started_at = now if now is not None else utc_now()
+        self.stopped_since = None
+
     def pending_workloads(self) -> list[WorkloadRecord]:
         return [w for w in self.workloads.values() if w.state in ("running", "queued")]
 
@@ -207,6 +224,8 @@ class RuntimeState:
         self.watchdog = WatchdogInfo()
         self.billed_seconds = 0.0
         self.running_since = None
+        self.session_started_at = None
+        self.stopped_since = None
         for record in self.workloads.values():
             if record.state in ("running", "queued"):
                 record.state = "failed"
@@ -233,6 +252,8 @@ class RuntimeState:
             "session_cost_usd": round(self.session_cost_usd, 4),
             "billed_seconds": round(self.billed_seconds, 1),
             "running_since": to_iso(self.running_since),
+            "session_started_at": to_iso(self.session_started_at),
+            "stopped_since": to_iso(self.stopped_since),
             "instance": self.instance.to_dict() if self.instance else None,
             "workloads": {k: v.to_dict() for k, v in self.workloads.items()},
             "watchdog": self.watchdog.to_dict(),
@@ -258,6 +279,8 @@ class RuntimeState:
             session_cost_usd=float(data.get("session_cost_usd") or 0.0),
             billed_seconds=float(data.get("billed_seconds") or 0.0),
             running_since=from_iso(data.get("running_since")),
+            session_started_at=from_iso(data.get("session_started_at")),
+            stopped_since=from_iso(data.get("stopped_since")),
             instance=Instance.from_dict(instance_data) if instance_data else None,
             workloads={
                 k: WorkloadRecord.from_dict(v) for k, v in (data.get("workloads") or {}).items()

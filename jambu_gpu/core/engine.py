@@ -39,6 +39,7 @@ from .models import (
     GpuSpec,
     Instance,
     InstanceState,
+    JAMBU_LABEL_PREFIX,
     ValidationResult,
     Workload,
 )
@@ -89,6 +90,7 @@ class Engine:
             stop_eliminates_billing=caps.stop_eliminates_billing,
             hourly_cost_usd=hourly_cost_usd,
             max_session_cost_usd=cfg.budget.max_session_cost_usd,
+            stopped_ttl_s=cfg.stopped_ttl_s,
         )
 
     def snapshot(self, state: RuntimeState) -> policy.Snapshot:
@@ -102,6 +104,8 @@ class Engine:
             locked=state.locked,
             locked_until=state.locked_until,
             provider_state=state.state,
+            session_started_at=state.session_started_at,
+            stopped_since=state.stopped_since,
         )
 
     def beacon(self, state: RuntimeState) -> Optional[WatchdogClient]:
@@ -143,6 +147,17 @@ class Engine:
             )
         if cfg.budget.max_hourly_cost_usd is None:
             result.warn("no budget.max_hourly_cost_usd set", "budget")
+        if (
+            not self.provider.capabilities.stop_eliminates_billing
+            and cfg.stopped_ttl_s is None
+            and not cfg.lifecycle.auto_destroy
+        ):
+            result.warn(
+                f"a stopped {self.provider.display_name} instance still bills storage, and "
+                "with lifecycle.stopped_ttl disabled and auto_destroy false nothing ever "
+                "removes it; set lifecycle.stopped_ttl (e.g. 24h)",
+                "lifecycle.stopped_ttl",
+            )
 
         result.merge(self.runtime.validate())
 
@@ -214,6 +229,7 @@ class Engine:
 
         # The watchdog, when reachable, is the authority on activity.
         remote = None
+        remote_terminated = False
         client = self.beacon(state)
         if client is not None:
             remote = client.try_state()
@@ -227,8 +243,10 @@ class Engine:
                 state.last_activity = max(
                     state.last_activity or 0.0, float(remote["last_activity"])
                 )
-            if remote.get("terminated"):
-                state.state = InstanceState.STOPPED.value
+            # `terminated` is the watchdog's memory of having shut the machine
+            # down. It survives a restart, so it is only a hint for when the
+            # provider itself cannot say whether the instance runs.
+            remote_terminated = bool(remote.get("terminated"))
             pulled = client.events(limit=200)
             if pulled:
                 self.events.extend(pulled)
@@ -236,10 +254,16 @@ class Engine:
             state.watchdog.last_error = "unreachable"
 
         if status.state in (InstanceState.READY, InstanceState.BUSY, InstanceState.IDLE):
+            # Provider truth first: a previous local STOPPED must not leak
+            # into the derivation after the instance was restarted.
+            state.state = status.state.value
             derived = policy.derive_state(self.snapshot(state), self.policy_config())
             state.state = derived if derived != InstanceState.UNKNOWN.value else status.state.value
         else:
-            state.state = status.state.value
+            if status.state is InstanceState.UNKNOWN and remote_terminated:
+                state.state = InstanceState.STOPPED.value
+            else:
+                state.state = status.state.value
             if status.state in (InstanceState.STOPPED, InstanceState.FAILED):
                 for record in state.workloads.values():
                     if record.state in ("running", "queued"):
@@ -248,7 +272,18 @@ class Engine:
 
         # Track actual billable time, not wall-clock time since creation - a
         # `status` checked long after auto-stop must not keep inflating cost.
-        state.mark_billable(InstanceState(state.state).is_billable_compute)
+        billable = InstanceState(state.state).is_billable_compute
+        state.mark_billable(billable)
+        if state.state == InstanceState.STOPPED.value:
+            state.mark_stopped()
+        elif billable and state.stopped_since is not None:
+            # Restarted outside this CLI (web console, another machine): a new
+            # session begins now.
+            state.mark_session_start()
+        elif billable and state.session_started_at is None:
+            # A state file from before sessions existed: never grant it a
+            # fresh max_lifetime, count from creation.
+            state.session_started_at = state.created_at
         if state.hourly_cost_usd:
             state.session_cost_usd = round(
                 state.hourly_cost_usd * state.accrued_billable_seconds() / 3600.0, 4
@@ -285,7 +320,7 @@ class Engine:
             ports=self._ports(),
             env=env,
             onstart=onstart,
-            label=f"jambu-{cfg.model.id.split('/')[-1][:24]}-{cfg.fingerprint()[:6]}",
+            label=f"{JAMBU_LABEL_PREFIX}{cfg.model.id.split('/')[-1][:24]}-{cfg.fingerprint()[:6]}",
             spot=cfg.compute.spot,
             region=cfg.compute.region,
             max_hourly_cost_usd=cfg.budget.max_hourly_cost_usd,
@@ -309,6 +344,9 @@ class Engine:
                 "lifecycle enforcement"
             )
         agent_source = build_agent_source(spec.actions_source if spec else None)
+        probe = (
+            self.runtime.activity_probe() if cfg.lifecycle.traffic_counts_as_activity else None
+        )
         agent_config = build_agent_config(
             provider=self.provider.name,
             instance_id="",  # resolved by /identify or the provider's own env
@@ -319,6 +357,7 @@ class Engine:
             policy=self.policy_config(),
             created_at=utc_now(),
             watchdog_spec=spec,
+            activity_probe=probe,
         )
         return build_onstart_script(
             agent_source=agent_source,
@@ -439,6 +478,7 @@ class Engine:
                 # provisioning/startup wait is never undercounted.
                 state.billed_seconds = 0.0
                 state.running_since = state.created_at
+                state.mark_session_start(state.created_at)
                 state.watchdog = WatchdogInfo(
                     installed=cfg.lifecycle.watchdog.enabled,
                     token=token,
@@ -508,6 +548,7 @@ class Engine:
                 state.instance = instance
                 state.starting = True
                 state.mark_billable(True)  # billing resumes now, not at the next reconcile
+                state.mark_session_start()  # max_lifetime and budget restart with it
                 self.events.emit(ev.INSTANCE_STARTED, instance_id=instance.id)
 
             instance = self._wait_running(state)
@@ -753,6 +794,8 @@ class Engine:
             "locked_until": state.locked_until,
             "hourly_cost_usd": state.hourly_cost_usd,
             "session_cost_usd": state.session_cost_usd,
+            "session_started_at": state.session_started_at,
+            "stopped_since": state.stopped_since,
             "workloads": [
                 {
                     "id": w.id,
@@ -886,6 +929,7 @@ class Engine:
             state.state = InstanceState.STOPPED.value
             state.starting = False
             state.mark_billable(False)
+            state.mark_stopped()
             if state.hourly_cost_usd:
                 state.session_cost_usd = round(
                     state.hourly_cost_usd * state.accrued_billable_seconds() / 3600.0, 4

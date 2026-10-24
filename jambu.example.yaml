@@ -45,9 +45,15 @@ gpu_runtime:
   lifecycle:
     max_lifetime: 6h
     idle_timeout: 15m
+    # Destroy an instance left STOPPED this long (a stopped Vast instance
+    # still bills storage). null keeps stopped instances forever.
+    stopped_ttl: 24h
 
     auto_stop: true
     auto_destroy: false
+
+    # Requests served by vLLM count as activity (read from its /metrics).
+    traffic_counts_as_activity: true
 
     cleanup_on_setup_failure: true
     allow_indefinite_lock: false

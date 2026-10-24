@@ -153,3 +153,35 @@ def test_clear_instance_closes_a_still_open_billable_period():
     with_now.mark_billable(True, now=0)
     with_now.mark_billable(False)  # closes using real utc_now(), just checking no crash
     assert with_now.billed_seconds >= 0
+
+
+def test_session_and_stop_times_round_trip_as_iso(store):
+    state = RuntimeState(instance_id="i-1", state="stopped")
+    state.mark_session_start(1_700_000_000.0)
+    state.mark_stopped(1_700_003_600.0)
+    state.mark_stopped(1_700_009_999.0)  # the first sighting is kept
+    store.save(state)
+
+    raw = json.loads(store.path.read_text())
+    assert raw["session_started_at"] == "2023-11-14T22:13:20Z"
+    assert raw["stopped_since"] == "2023-11-14T23:13:20Z"
+    loaded = store.load()
+    assert loaded.session_started_at == 1_700_000_000.0
+    assert loaded.stopped_since == 1_700_003_600.0
+
+
+def test_a_new_session_clears_stopped_since_and_clear_instance_resets_both():
+    state = RuntimeState(instance_id="i-1")
+    state.mark_stopped(10.0)
+    state.mark_session_start(20.0)
+    assert state.stopped_since is None and state.session_started_at == 20.0
+    state.mark_stopped(30.0)
+    state.clear_instance()
+    assert state.session_started_at is None and state.stopped_since is None
+
+
+def test_state_files_from_before_sessions_still_load(store):
+    store.ensure_dirs()
+    store.path.write_text(json.dumps({"version": 1, "instance_id": "i-1", "state": "ready"}))
+    loaded = store.load()
+    assert loaded.session_started_at is None and loaded.stopped_since is None

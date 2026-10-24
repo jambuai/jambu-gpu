@@ -166,3 +166,19 @@ def test_validate_is_quiet_for_unmanaged_vllm_args(write_config):
     config = write_config(runtime={"vllm_args": {"max_num_seqs": 32}})
     result = VllmRuntime(config).validate()
     assert not any("vllm_args" in (i.field or "") for i in result.issues)
+
+
+def test_activity_probe_reads_vllm_metrics_on_loopback(write_config):
+    runtime = VllmRuntime(write_config(runtime={"port": 8123}))
+    assert runtime.activity_probe() == {
+        "kind": "prometheus",
+        "url": "http://127.0.0.1:8123/metrics",
+        "gauges": ["vllm:num_requests_running", "vllm:num_requests_waiting"],
+        "counters": ["vllm:request_success_total", "vllm:prompt_tokens_total"],
+    }
+
+
+def test_runtimes_without_a_traffic_signal_have_no_probe(write_config):
+    from jambu_gpu.runtime.base import NoRuntime
+
+    assert NoRuntime(write_config(runtime={"engine": "none"})).activity_probe() is None

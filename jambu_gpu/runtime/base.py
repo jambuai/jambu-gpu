@@ -53,6 +53,14 @@ class ModelRuntime(ABC):
     def base_url(self, endpoint_url: str) -> str:
         return endpoint_url.rstrip("/")
 
+    def activity_probe(self) -> Optional[dict]:
+        """How the on-instance watchdog can tell the runtime is serving requests.
+
+        None means the runtime exposes no such signal; only workloads, startup
+        and locks then count as activity.
+        """
+        return None
+
     def validate(self) -> ValidationResult:
         return ValidationResult()
 
