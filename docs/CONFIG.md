@@ -118,7 +118,7 @@ How the model runs. Independent from where it runs.
 | `dtype` | `auto` | vLLM dtype. |
 | `gpu_memory_utilization` | `0.90` | Fraction of VRAM vLLM may claim. |
 | `tensor_parallel_size` | `compute.gpu.count` | Shards across GPUs. |
-| `api_key` | – | Require this key on the model endpoint. |
+| `api_key` | generated | The key the model endpoint requires. Unset, `setup` generates a random one per instance; `gpu env` prints it. |
 | `vllm_args` | `{}` | Structured escape hatch for any vLLM flag this schema doesn't model: `{flag: value}` → `--flag value` (`true`/`false` → a bare/negated flag, a dict or list → JSON-encoded). Applied before `extra_args`. See [`docs/CHOOSING_A_MODEL.md`](CHOOSING_A_MODEL.md#dynamic--un-modeled-vllm-flags). |
 | `extra_args` | `[]` | Raw argv appended verbatim, last — for anything `vllm_args` can't express. |
 | `tool_calling` | `auto` | `auto` guesses `--tool-call-parser` from `model.id` and turns tool calling on if recognized; `on` requires a resolvable parser (fails `validate` otherwise); `off` never passes tool-calling flags. |

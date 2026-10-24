@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import sys
 from pathlib import Path
 from typing import Optional
@@ -12,7 +13,7 @@ from ..core.errors import JambuError
 from . import account
 from . import inspect as inspect_cli
 from . import lifecycle, providers, run, setup, status, validate
-from ._common import Context, err_console, get_context
+from ._common import Context, err_console, get_context, print_json
 
 app = typer.Typer(
     name="gpu",
@@ -81,6 +82,47 @@ def endpoint_command(ctx: typer.Context) -> None:
         err_console.print("error: no endpoint; run `gpu setup` first")
         raise typer.Exit(3)
     print(state.endpoint)
+
+
+@app.command("env")
+def env_command(
+    ctx: typer.Context,
+    fmt: str = typer.Option(
+        "shell", "--format", "-f", help="shell (export lines), dotenv or json."
+    ),
+) -> None:
+    """Print how to reach the model (base URL, API key, model) without starting anything.
+
+    `eval "$(gpu env)"` sets OPENAI_BASE_URL, OPENAI_API_KEY and JAMBU_MODEL_ID,
+    which every OpenAI SDK reads. Exit code 3 when there is no endpoint.
+    """
+    context = get_context(ctx)
+    if fmt not in ("shell", "dotenv", "json"):
+        err_console.print("error: --format must be shell, dotenv or json")
+        raise typer.Exit(2)
+    try:
+        engine = context.engine()
+        conn = engine.connection(engine.store.load())
+    except JambuError as exc:
+        err_console.print(f"error: {exc}")
+        raise typer.Exit(getattr(exc, "exit_code", 1)) from exc
+    if context.json or fmt == "json":
+        print_json(conn)
+        if not conn["endpoint"]:
+            raise typer.Exit(3)
+        return
+    if not conn["endpoint"]:
+        err_console.print("error: no endpoint; run `gpu setup` first")
+        raise typer.Exit(3)
+    values = {
+        "OPENAI_BASE_URL": conn["base_url"],
+        "OPENAI_API_KEY": conn["api_key"],
+        "JAMBU_GPU_ENDPOINT": conn["endpoint"],
+        "JAMBU_MODEL_ID": conn["model"],
+    }
+    prefix = "export " if fmt == "shell" else ""
+    for key, value in values.items():
+        print(f"{prefix}{key}={shlex.quote(str(value))}")
 
 
 @app.command("version")

@@ -14,7 +14,7 @@ pointed at a self-hosted endpoint instead of the real OpenAI API.
 | --- | --- |
 | `JAMBU_GPU_ENDPOINT` | `gpu run` |
 | `JAMBU_MODEL_ID` | `gpu run` |
-| `OPENAI_API_KEY` | `gpu run` (or `runtime.api_key` in jambu.yaml) |
+| `OPENAI_API_KEY` | `gpu run` (the key generated for the instance, or `runtime.api_key`) |
 
 That's the entire integration surface. No gpu SDK, no wrapper client.
 

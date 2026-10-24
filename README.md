@@ -22,6 +22,8 @@ gpu run python experiment.py
 
 When you are finished, `gpu destroy`. If you walk away, the idle timeout does it.
 
+From an application in any language: `gpu --json setup` returns the OpenAI-compatible `base_url`, `api_key` and `model`, and the app uses any OpenAI SDK. See [Integrating gpu into an application](docs/INTEGRATION.md), with a ready TypeScript client.
+
 As a last line of defense, `gpu ls` shows every jambu instance in the account and `gpu sweep --install-timer` sets up a systemd user timer that guards every project on the machine by its own rules and cleans up the orphans no project tracks. See [Keeping the account clean](docs/USAGE.md#keeping-the-account-clean).
 
 The API key is read from the environment, a project `.env`, or `~/.jambu/credentials`. It never goes in the manifest.
@@ -43,6 +45,7 @@ The file is `jambu.yaml`. This tool reads only the `gpu_runtime:` key, so other 
 
 ## Docs
 
+- [Integrating into an application (any language)](docs/INTEGRATION.md)
 - [Commands, workloads, and agents](docs/USAGE.md)
 - [Every config field](docs/CONFIG.md)
 - [Choosing a model](docs/CHOOSING_A_MODEL.md)

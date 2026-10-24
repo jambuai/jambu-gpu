@@ -4,6 +4,7 @@ import json
 
 from typer.testing import CliRunner
 
+import jambu_gpu
 from jambu_gpu.cli.main import app
 
 runner = CliRunner()
@@ -108,7 +109,7 @@ def test_run_requires_a_command(config, monkeypatch):
 def test_version():
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "0.1.0"
+    assert result.stdout.strip() == jambu_gpu.__version__
 
 
 def test_inspect_model_json(monkeypatch, tmp_path):
@@ -263,3 +264,41 @@ def test_logs_takes_a_source_and_a_line_count(config, monkeypatch):
     assert result.exit_code == 0
     assert seen == {"limit": 200, "source": None}
     assert "driver too old" in result.stdout
+
+
+def _saved_endpoint(config, api_key="k-123"):
+    from jambu_gpu.core.state import RuntimeState, StateStore
+
+    store = StateStore(config.state_dir)
+    state = RuntimeState(
+        provider="vast",
+        instance_id="42",
+        state="ready",
+        endpoint="http://1.2.3.4:5",
+        api_key=api_key,
+    )
+    store.save(state)
+
+
+def test_env_prints_what_an_openai_client_needs(config, monkeypatch):
+    monkeypatch.chdir(config.project_dir)
+    monkeypatch.setenv("VAST_API_KEY", "x")
+    _saved_endpoint(config)
+    result = runner.invoke(app, ["env"])
+    assert result.exit_code == 0
+    assert "export OPENAI_BASE_URL=http://1.2.3.4:5/v1" in result.stdout
+    assert "export OPENAI_API_KEY=k-123" in result.stdout
+
+    payload = json.loads(runner.invoke(app, ["--json", "env"]).stdout)
+    assert payload["base_url"] == "http://1.2.3.4:5/v1"
+    assert payload["api_key"] == "k-123"
+    assert payload["model"] == config.model.id
+
+
+def test_env_without_an_endpoint_exits_3(config, monkeypatch):
+    monkeypatch.chdir(config.project_dir)
+    monkeypatch.setenv("VAST_API_KEY", "x")
+    assert runner.invoke(app, ["env"]).exit_code == 3
+    result = runner.invoke(app, ["env", "--format", "json"])
+    assert result.exit_code == 3
+    assert json.loads(result.stdout)["state"] == "none"

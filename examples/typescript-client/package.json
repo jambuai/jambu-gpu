@@ -1,0 +1,18 @@
+{
+  "name": "jambu-gpu-typescript-client",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Any TypeScript app using a GPU rented and guarded by the gpu CLI, through the official OpenAI SDK.",
+  "scripts": {
+    "start": "node --experimental-strip-types src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "openai": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
+  }
+}

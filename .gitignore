@@ -13,3 +13,4 @@ build/
 .coverage
 node_modules/
 *.tsbuildinfo
+.claude/

@@ -118,6 +118,7 @@ def vllm_image_cuda(image: str) -> Optional[float]:
 class VllmRuntime(ModelRuntime):
     engine = "vllm"
     default_image = DEFAULT_IMAGE
+    api_key_env = "VLLM_API_KEY"
 
     def required_cuda(self) -> Optional[float]:
         return vllm_image_cuda(self.image())

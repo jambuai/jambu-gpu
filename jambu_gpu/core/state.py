@@ -150,6 +150,9 @@ class RuntimeState:
     # When the instance was first observed STOPPED; drives lifecycle.stopped_ttl
     # on providers where a stopped instance still bills (storage).
     stopped_since: Optional[float] = None
+    # The key the model server demands (vLLM --api-key): runtime.api_key, or
+    # one generated per instance so a public endpoint is never open to anyone.
+    api_key: Optional[str] = None
     instance: Optional[Instance] = None
     workloads: dict[str, WorkloadRecord] = field(default_factory=dict)
     watchdog: WatchdogInfo = field(default_factory=WatchdogInfo)
@@ -233,6 +236,7 @@ class RuntimeState:
         self.instance_id = None
         self.instance = None
         self.endpoint = None
+        self.api_key = None
         self.state = state
         self.starting = False
         self.locked = False
@@ -270,6 +274,7 @@ class RuntimeState:
             "running_since": to_iso(self.running_since),
             "session_started_at": to_iso(self.session_started_at),
             "stopped_since": to_iso(self.stopped_since),
+            "api_key": self.api_key,
             "instance": self.instance.to_dict() if self.instance else None,
             "workloads": {k: v.to_dict() for k, v in self.workloads.items()},
             "watchdog": self.watchdog.to_dict(),
@@ -297,6 +302,7 @@ class RuntimeState:
             running_since=from_iso(data.get("running_since")),
             session_started_at=from_iso(data.get("session_started_at")),
             stopped_since=from_iso(data.get("stopped_since")),
+            api_key=data.get("api_key"),
             instance=Instance.from_dict(instance_data) if instance_data else None,
             workloads={
                 k: WorkloadRecord.from_dict(v) for k, v in (data.get("workloads") or {}).items()

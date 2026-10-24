@@ -15,6 +15,7 @@ from conftest import BASE_CONFIG, _deep_merge
 from fakes import FakeProvider
 from typer.testing import CliRunner
 
+import jambu_gpu
 from jambu_gpu.cli import _common
 from jambu_gpu.cli import account as account_cli
 from jambu_gpu.cli import timer as timer_mod
@@ -676,4 +677,4 @@ def test_the_module_entrypoint_the_timer_runs_works():
         text=True,
         check=True,
     )
-    assert out.stdout.strip() == "0.1.0"
+    assert out.stdout.strip() == jambu_gpu.__version__

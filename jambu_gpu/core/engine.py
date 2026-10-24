@@ -8,6 +8,7 @@ reconciliation, idempotency and cleanup. It knows about the provider
 from __future__ import annotations
 
 import re
+import secrets
 import time
 from typing import Any, Callable, Optional, Sequence
 
@@ -394,7 +395,19 @@ class Engine:
             ports.append(self.config.lifecycle.watchdog.port)
         return ports
 
-    def _build_onstart(self, token: str) -> str:
+    def _api_key(self) -> Optional[str]:
+        """The key the model server will demand: the configured one, or a fresh one.
+
+        The endpoint is public, and traffic counts as activity: an open one
+        would let anyone use the GPU and keep it billing.
+        """
+        if self.config.runtime.api_key:
+            return self.config.runtime.api_key
+        if self.runtime.api_key_env is None:
+            return None
+        return secrets.token_urlsafe(32)
+
+    def _build_onstart(self, token: str, api_key: Optional[str] = None) -> str:
         cfg = self.config
         enabled = cfg.lifecycle.watchdog.enabled
         spec = self.provider.watchdog_spec(None) if enabled else None
@@ -424,11 +437,16 @@ class Engine:
             runtime_pid_path=self.runtime.runtime_pid_path(),
             runtime_log_path=self.runtime.runtime_log_path(),
         )
+        runtime_env = dict(self.runtime.env())
+        # A configured key is already on the command line; only a generated
+        # one travels through the environment.
+        if api_key and api_key != cfg.runtime.api_key and self.runtime.api_key_env:
+            runtime_env[self.runtime.api_key_env] = api_key
         return build_onstart_script(
             agent_source=agent_source,
             agent_config=agent_config,
             runtime_start_command=self.runtime.start_command(),
-            runtime_env=self.runtime.env(),
+            runtime_env=runtime_env,
             watchdog_enabled=enabled,
         )
 
@@ -493,7 +511,8 @@ class Engine:
 
             # -- provision ------------------------------------------------
             token = watchdog_pkg.generate_token()
-            onstart = self._build_onstart(token)
+            api_key = self._api_key()
+            onstart = self._build_onstart(token, api_key)
 
             self.events.emit(
                 ev.PROVISION_REQUESTED,
@@ -523,7 +542,7 @@ class Engine:
                 if estimated:
                     self.echo(f"  cheapest match: ${estimated:.3f}/h")
                 try:
-                    return self._provision(state, spec, token, fingerprint, wait)
+                    return self._provision(state, spec, token, fingerprint, wait, api_key)
                 except HostFailure as exc:
                     retry = attempt < attempts
                     self._host_failed(state, exc, attempt, attempts, retry)
@@ -554,6 +573,7 @@ class Engine:
         token: str,
         fingerprint: str,
         wait: bool,
+        api_key: Optional[str] = None,
     ) -> RuntimeState:
         cfg = self.config
         instance = self.provider.setup(spec)
@@ -573,6 +593,7 @@ class Engine:
         state.instance = instance
         state.fingerprint = fingerprint
         state.model_id = cfg.model.id
+        state.api_key = api_key
         state.created_at = instance.created_at or utc_now()
         state.last_activity = utc_now()
         state.starting = True
@@ -900,18 +921,40 @@ class Engine:
     # run (spec section 16)
     # ------------------------------------------------------------------
 
+    def api_key_for(self, state: RuntimeState) -> str:
+        # An instance from before generated keys runs without one; vLLM then
+        # accepts any value, and OpenAI clients refuse an empty one.
+        return state.api_key or self.config.runtime.api_key or "jambu-local"
+
+    def served_model(self) -> str:
+        """The name clients pass as `model` in OpenAI requests."""
+        return self.config.model.served_name or self.config.model.id
+
+    def connection(self, state: RuntimeState) -> dict[str, Any]:
+        """How an application reaches the model: the stable integration contract."""
+        endpoint = state.endpoint
+        return {
+            "instance_id": state.instance_id,
+            "state": state.state if state.instance_id else "none",
+            "endpoint": endpoint,
+            "base_url": f"{endpoint.rstrip('/')}/v1" if endpoint else None,
+            "api_key": self.api_key_for(state) if endpoint else None,
+            "model": self.served_model(),
+            "hourly_cost_usd": state.hourly_cost_usd,
+        }
+
     def workload_env(self, state: RuntimeState, workload_id: str) -> dict[str, str]:
         endpoint = state.endpoint or ""
         env: dict[str, str] = {
             "JAMBU_PROVIDER": self.provider.name,
             "JAMBU_INSTANCE_ID": state.instance_id or "",
             "JAMBU_WORKLOAD_ID": workload_id,
-            "JAMBU_MODEL_ID": self.config.model.id,
+            "JAMBU_MODEL_ID": self.served_model(),
         }
         if endpoint:
             env["JAMBU_GPU_ENDPOINT"] = endpoint
             env["OPENAI_BASE_URL"] = f"{endpoint.rstrip('/')}/v1"
-            env["OPENAI_API_KEY"] = self.config.runtime.api_key or "jambu-local"
+            env["OPENAI_API_KEY"] = self.api_key_for(state)
         if state.instance and state.instance.ssh_host:
             env["JAMBU_SSH_HOST"] = state.instance.ssh_host
             env["JAMBU_SSH_PORT"] = str(state.instance.ssh_port or 22)
@@ -990,6 +1033,7 @@ class Engine:
             "state": state.state if state.instance_id else "none",
             "model": state.model_id or self.config.model.id,
             "endpoint": state.endpoint,
+            "base_url": f"{state.endpoint.rstrip('/')}/v1" if state.endpoint else None,
             "created_at": state.created_at,
             "age_seconds": snap.age_seconds() if state.created_at else None,
             "idle_seconds": snap.idle_seconds(cfg),

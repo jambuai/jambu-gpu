@@ -26,8 +26,9 @@ Operator reference. The project front page is the [README](../README.md). Field-
 | `gpu sweep` | Guard every registered project by its own rules, then report (or `--apply`) stops and destroys of orphans |
 | `gpu sweep --install-timer` | Write a systemd user timer running `sweep --apply`, and register this project |
 | `gpu endpoint` | Print the model endpoint URL |
+| `gpu env` | Print the base URL, API key and model as shell exports (`--format dotenv\|json`), without starting anything |
 
-Every command accepts `--json` and `--config PATH`.
+Every command accepts `--json` and `--config PATH`. To call `gpu` from an application in any language, see [INTEGRATION.md](INTEGRATION.md).
 
 ## The manifest
 
@@ -47,8 +48,8 @@ The full field list is [CONFIG.md](CONFIG.md). A filled example is [`jambu.examp
 | --- | --- |
 | `JAMBU_GPU_ENDPOINT` | `http://<ip>:<port>` |
 | `OPENAI_BASE_URL` | `http://<ip>:<port>/v1` |
-| `OPENAI_API_KEY` | `runtime.api_key`, otherwise `jambu-local` |
-| `JAMBU_MODEL_ID` | `model.id` |
+| `OPENAI_API_KEY` | the endpoint's key: `runtime.api_key`, otherwise the one generated for this instance |
+| `JAMBU_MODEL_ID` | the name to request: `model.served_name`, otherwise `model.id` |
 | `JAMBU_INSTANCE_ID`, `JAMBU_WORKLOAD_ID`, `JAMBU_PROVIDER` | identity |
 | `JAMBU_SSH_HOST`, `JAMBU_SSH_PORT` | when the provider exposes SSH |
 

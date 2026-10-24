@@ -100,6 +100,7 @@ class FakeProvider(GPUProvider):
         return offers[:limit]
 
     def setup(self, spec: ComputeSpec) -> Instance:
+        self.last_spec = spec
         if self.fail_setup is not None:
             self.counter += 1
             instance_id = f"i-{self.counter}"

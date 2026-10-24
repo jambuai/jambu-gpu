@@ -250,6 +250,55 @@ def test_workload_env_points_at_the_remote_runtime(engine):
     assert env["JAMBU_WORKLOAD_ID"] == "w1"
 
 
+def test_setup_locks_the_endpoint_with_a_generated_key(engine):
+    state = engine.setup(wait=False)
+    assert state.api_key and len(state.api_key) >= 40
+    assert f"export VLLM_API_KEY='{state.api_key}'" in engine.provider.last_spec.onstart
+    state.endpoint = "http://127.0.0.1:9"
+    env = engine.workload_env(state, "w1")
+    assert env["OPENAI_API_KEY"] == state.api_key
+
+
+def test_each_instance_gets_its_own_key(engine):
+    first = engine.setup(wait=False).api_key
+    second = engine.setup(wait=False, recreate=True).api_key
+    assert first != second
+
+
+def test_a_configured_key_is_used_and_not_repeated_in_the_environment(write_config):
+    engine = make_engine(write_config(runtime={"api_key": "my-key"}))
+    state = engine.setup(wait=False)
+    assert state.api_key == "my-key"
+    assert "VLLM_API_KEY" not in engine.provider.last_spec.onstart
+    assert "--api-key my-key" in engine.provider.last_spec.onstart
+
+
+def test_an_instance_from_before_generated_keys_still_gets_a_client_key(engine):
+    state = engine.setup(wait=False)
+    state.api_key = None
+    state.endpoint = "http://127.0.0.1:9"
+    assert engine.workload_env(state, "w1")["OPENAI_API_KEY"] == "jambu-local"
+
+
+def test_connection_is_what_a_client_needs(write_config):
+    engine = make_engine(write_config(model={"id": "org/m", "served_name": "m"}))
+    state = engine.setup(wait=False)
+    state.endpoint = "http://1.2.3.4:5/"
+    conn = engine.connection(state)
+    assert conn["base_url"] == "http://1.2.3.4:5/v1"
+    assert conn["api_key"] == state.api_key
+    assert conn["model"] == "m"
+    assert engine.workload_env(state, "w1")["JAMBU_MODEL_ID"] == "m"
+
+
+def test_connection_without_an_instance_has_no_key(engine):
+    from jambu_gpu.core.state import RuntimeState
+
+    conn = engine.connection(RuntimeState())
+    assert conn["state"] == "none"
+    assert conn["endpoint"] is None and conn["api_key"] is None
+
+
 # -- provider isolation (spec criterion 2, 11) -------------------------------
 
 

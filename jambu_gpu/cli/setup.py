@@ -88,22 +88,19 @@ def setup_command(
         handle(exc)
         return
 
-    payload = {
-        "instance_id": state.instance_id,
-        "state": state.state,
-        "endpoint": state.endpoint,
-        "model": state.model_id,
-        "hourly_cost_usd": state.hourly_cost_usd,
-        "watchdog": state.watchdog.to_dict(),
-    }
+    payload = engine.connection(state)
+    watchdog = state.watchdog.to_dict()
+    watchdog.pop("token", None)
+    payload["watchdog"] = watchdog
     if context.json:
         print_json(payload)
         return
     if state.endpoint:
         console.print(
             f"\n  endpoint  [bold]{state.endpoint}[/bold]\n"
-            f"  openai    [bold]{state.endpoint.rstrip('/')}/v1[/bold]\n"
-            f"  model     [bold]{state.model_id}[/bold]"
+            f"  openai    [bold]{payload['base_url']}[/bold]\n"
+            f"  model     [bold]{payload['model']}[/bold]\n"
+            "  api key   [dim]gpu env[/dim]"
         )
     console.print("\nnext: gpu run python your_experiment.py")
 

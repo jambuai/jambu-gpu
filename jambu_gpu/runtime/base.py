@@ -81,6 +81,10 @@ class ModelRuntime(ABC):
     def env(self) -> dict[str, str]:
         return {}
 
+    # The environment variable through which the server takes its API key;
+    # None for a runtime that cannot require one.
+    api_key_env: Optional[str] = None
+
     @abstractmethod
     def start_command(self) -> str:
         """Shell command that launches the model server in the background."""
