@@ -710,3 +710,54 @@ def test_the_remote_startup_grace_covers_the_boot_and_the_model_server(write_con
 
     assert grace() == 30 * 60 + 10 * 60 + 300  # boot_timeout 30m by default
     assert grace(boot_timeout="20m", startup_timeout="5m") == 20 * 60 + 5 * 60 + 300
+
+
+class _NetworkDeadRuntimeWatchdog(_DeadRuntimeWatchdog):
+    """Live: vLLM died fetching weights - `httpx.RemoteProtocolError` from the hub."""
+
+    def logs(self, name="runtime", lines=200):
+        self.log_requests.append((name, lines))
+        return [
+            "  File \"huggingface_hub/utils/_http.py\", line 540, in _http_backoff_base",
+            "httpx.RemoteProtocolError: Server disconnected without sending a response.",
+        ][-lines:]
+
+
+def test_a_model_download_killed_by_the_host_network_moves_to_another_host(engine, monkeypatch):
+    from jambu_gpu.core.errors import HostFailure
+
+    monkeypatch.setattr(engine, "beacon", lambda _state: _NetworkDeadRuntimeWatchdog())
+    with pytest.raises(HostFailure, match="Server disconnected"):
+        engine.setup()
+
+    assert engine.provider.counter == engine.config.compute.host_attempts
+    assert len(_events(engine, "host_failed")) == engine.config.compute.host_attempts
+    assert engine.provider.instances == {}
+
+
+def test_failed_hosts_are_remembered_by_the_next_setup(write_config, monkeypatch):
+    from jambu_gpu.core.errors import HostFailure
+    from jambu_gpu.core.hosts import BadHosts
+
+    engine, _, _ = _booting(write_config, monkeypatch)
+    engine.provider.fail_first_hosts(1)
+    engine.setup()
+    assert BadHosts().recent("fake") == ["m1"]
+    engine.destroy()
+
+    # A fresh setup, even with no failures scripted, never rents m1 again.
+    engine.provider.failing_hosts = set()
+    engine.setup()
+    hosts = [i.host_id for i in engine.provider.instances.values()]
+    assert hosts and "m1" not in hosts
+
+
+def test_bad_hosts_expire(tmp_path):
+    from jambu_gpu.core.hosts import BadHosts
+
+    memory = BadHosts(tmp_path / "bad.json", ttl_s=60)
+    memory.mark("vast", "150616", "image pull timed out", now=1000.0)
+    assert memory.recent("vast", now=1030.0) == ["150616"]
+    assert memory.recent("vast", now=1061.0) == []
+    (tmp_path / "bad.json").write_text("{not json")
+    assert memory.recent("vast") == []  # a corrupt file never blocks a setup

@@ -7,6 +7,7 @@ reconciliation, idempotency and cleanup. It knows about the provider
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Callable, Optional, Sequence
 
@@ -45,9 +46,18 @@ from .models import (
     ValidationResult,
     Workload,
 )
+from .hosts import BadHosts
 from .state import RuntimeState, StateStore, WatchdogInfo, utc_now
 
 Echo = Callable[[str], None]
+
+# Signatures, in a dead model server's log, of a network that failed it - not
+# of a model or config that would fail on any machine.
+_HOST_NETWORK_FAILURE = re.compile(
+    r"RemoteProtocolError|ConnectError|ConnectTimeout|ReadTimeout|"
+    r"Connection (?:reset|refused|aborted)|TLS handshake timeout|"
+    r"Temporary failure in name resolution|Network is unreachable"
+)
 
 # Where `gpu logs --source` reads from: the watchdog serves the instance files.
 LOG_SOURCES = ("runtime", "onstart", "watchdog", "provider")
@@ -501,7 +511,8 @@ class Engine:
             # its machine is not rented again by this setup. Retrying means
             # destroying the bad one first, so it needs cleanup_on_setup_failure.
             attempts = cfg.compute.host_attempts if cfg.lifecycle.cleanup_on_setup_failure else 1
-            excluded: list[str] = []
+            bad_hosts = BadHosts()
+            excluded: list[str] = bad_hosts.recent(self.provider.name)
             for attempt in range(1, attempts + 1):
                 spec = self.build_spec(onstart)
                 spec.exclude_hosts = list(excluded)
@@ -514,7 +525,7 @@ class Engine:
                 except HostFailure as exc:
                     retry = attempt < attempts
                     self._host_failed(state, exc, attempt, attempts, retry)
-                    if retry and self._discard_host(state, exc, excluded):
+                    if retry and self._discard_host(state, exc, excluded, bad_hosts):
                         continue
                     if retry or attempts == 1:
                         self._fail_setup(state, exc)
@@ -621,7 +632,11 @@ class Engine:
         self.echo(line)
 
     def _discard_host(
-        self, state: RuntimeState, exc: HostFailure, excluded: list[str]
+        self,
+        state: RuntimeState,
+        exc: HostFailure,
+        excluded: list[str],
+        bad_hosts: Optional["BadHosts"] = None,
     ) -> bool:
         """Destroy a machine that failed to boot so another can be rented.
 
@@ -643,6 +658,8 @@ class Engine:
         host_id = instance.host_id if instance else None
         if host_id:
             excluded.append(host_id)
+            if bad_hosts is not None:
+                bad_hosts.mark(self.provider.name, host_id, exc.reason)
         return True
 
     def _fail_setup(self, state: RuntimeState, exc: BaseException) -> None:
@@ -830,7 +847,16 @@ class Engine:
                 return status.message or "the instance entered a failed state"
             if status.state is InstanceState.STOPPED:
                 return "the instance was stopped"
-            return self._runtime_exited(state)
+            reason = self._runtime_exited(state)
+            if reason and _HOST_NETWORK_FAILURE.search(reason):
+                # The model server died fetching weights over a broken network:
+                # the machine's fault, so another host gets a chance.
+                raise HostFailure(
+                    f"model server did not start: {reason}",
+                    reason="model download failed on this host's network",
+                    instance=state.instance,
+                )
+            return reason
 
         wait_for_healthy(
             url,
