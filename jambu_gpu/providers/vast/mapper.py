@@ -64,6 +64,23 @@ def vram_gb(value: Any) -> float:
     return round(number / 1024.0, 1) if number > 512 else round(number, 1)
 
 
+def _float_or_none(value: Any) -> Optional[float]:
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def effective_min_cuda(spec: ComputeSpec, options: VastOptions) -> Optional[float]:
+    """The stricter of the adapter's floor and what the spec (image) needs."""
+    known = [
+        v
+        for v in (_float_or_none(options.min_cuda), _float_or_none(spec.gpu.cuda_min))
+        if v
+    ]
+    return max(known) if known else None
+
+
 def map_offer(raw: dict[str, Any]) -> Offer:
     return Offer(
         id=str(raw.get("id") or raw.get("ask_contract_id") or ""),
@@ -74,6 +91,8 @@ def map_offer(raw: dict[str, Any]) -> Offer:
         hourly_cost_usd=float(raw.get("dph_total") or 0.0),
         region=raw.get("geolocation"),
         score=float(raw.get("score") or 0.0) if raw.get("score") is not None else None,
+        # Highest CUDA the host driver runs; an image needing more dies at boot.
+        cuda_max=_float_or_none(raw.get("cuda_max_good")),
         raw=raw,
     )
 
@@ -152,8 +171,9 @@ def build_search_query(
         query["reliability2"] = {"gte": float(options.min_reliability)}
     if options.min_inet_down_mbps:
         query["inet_down"] = {"gte": float(options.min_inet_down_mbps)}
-    if options.min_cuda:
-        query["cuda_max_good"] = {"gte": float(options.min_cuda)}
+    min_cuda = effective_min_cuda(spec, options)
+    if min_cuda:
+        query["cuda_max_good"] = {"gte": min_cuda}
     # gpu_name is deliberately NOT sent server-side: Vast's field only
     # accepts an exact match ({"eq": ...}), but name_filter is documented and
     # used everywhere else (offer_matches below) as a case-insensitive
@@ -205,8 +225,16 @@ def build_create_payload(
     return payload
 
 
-def offer_matches(offer: Offer, spec: ComputeSpec) -> bool:
-    """Client-side guard: Vast's filters are advisory, verify what we got."""
+def offer_matches(offer: Offer, spec: ComputeSpec, min_cuda: Optional[float] = None) -> bool:
+    """Client-side guard: Vast's filters are advisory, verify what we got.
+
+    ``min_cuda`` defaults to the spec's own ``gpu.cuda_min``.
+    """
+    if min_cuda is None:
+        min_cuda = _float_or_none(spec.gpu.cuda_min)
+    # 1e-6: 12.9 must match a host reporting exactly 12.9.
+    if min_cuda and offer.cuda_max is not None and offer.cuda_max + 1e-6 < min_cuda:
+        return False
     if offer.gpu_count < spec.gpu.count:
         return False
     if spec.gpu.min_vram_gb and offer.gpu_vram_gb + 0.5 < float(spec.gpu.min_vram_gb):

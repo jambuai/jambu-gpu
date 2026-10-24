@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import json
 import shlex
-from typing import Any
+import re
+from typing import Any, Optional
 
 from ..core.models import ValidationResult
 from ..core.tool_parsers import guess_tool_call_parser  # noqa: F401 (re-exported)
-from .base import ModelRuntime
+from .base import ModelRuntime, cuda_from_tag, image_repo, image_tag
 
 # vLLM flags gpu already manages explicitly - collided with via
 # runtime.vllm_args, these would fight the config fields meant to control
@@ -78,11 +79,53 @@ def flatten_vllm_args(mapping: dict[str, Any]) -> list[str]:
     return args
 
 LOG_PATH = "/var/log/jambu/vllm.log"
+PID_PATH = "/var/run/jambu/vllm.pid"
+
+# Pinned: `latest` moved to CUDA 13 (v0.32.0) and landed on hosts whose driver
+# tops out at 12.2, where vLLM dies at boot. The `-cuNNN` tag says what it needs.
+DEFAULT_IMAGE = "vllm/vllm-openai:v0.32.0-cu129"
+VLLM_REPO = "vllm/vllm-openai"
+
+# CUDA behind the bare `vX.Y.Z` / `latest` tags (the image's NVIDIA_REQUIRE_CUDA),
+# from the first release that requires it. Older bare tags are left unknown.
+_BARE_TAG_CUDA = [((0, 32), 13.0)]
+_LATEST_CUDA = 13.0
+_VERSION_TAG = re.compile(r"^v?(\d+)\.(\d+)(?:\.\d+)?$")
+
+
+def vllm_image_cuda(image: str) -> Optional[float]:
+    """CUDA a vLLM image needs: the ``-cuNNN`` suffix, else the known bare tags."""
+    tag = image_tag(image)
+    suffixed = cuda_from_tag(tag)
+    if suffixed is not None:
+        return suffixed
+    if not image_repo(image).endswith(VLLM_REPO):
+        return None
+    if tag == "latest":
+        return _LATEST_CUDA
+    match = _VERSION_TAG.match(tag)
+    if not match:
+        return None
+    version = (int(match.group(1)), int(match.group(2)))
+    found = None
+    for since, cuda in _BARE_TAG_CUDA:
+        if version >= since:
+            found = cuda
+    return found
 
 
 class VllmRuntime(ModelRuntime):
     engine = "vllm"
-    default_image = "vllm/vllm-openai:latest"
+    default_image = DEFAULT_IMAGE
+
+    def required_cuda(self) -> Optional[float]:
+        return vllm_image_cuda(self.image())
+
+    def runtime_pid_path(self) -> str:
+        return PID_PATH
+
+    def runtime_log_path(self) -> str:
+        return LOG_PATH
 
     def env(self) -> dict[str, str]:
         env: dict[str, str] = {
@@ -154,7 +197,7 @@ class VllmRuntime(ModelRuntime):
         return (
             f"mkdir -p $(dirname {LOG_PATH}) && "
             f"nohup python3 -m vllm.entrypoints.openai.api_server {args} "
-            f">> {LOG_PATH} 2>&1 & echo $! > /var/run/jambu/vllm.pid"
+            f">> {LOG_PATH} 2>&1 & echo $! > {PID_PATH}"
         )
 
     def activity_probe(self) -> dict:

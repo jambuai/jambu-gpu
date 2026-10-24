@@ -238,3 +238,28 @@ def test_profiles_command_with_no_catalog_is_not_an_error(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["profiles"])
     assert result.exit_code == 0
+
+
+def test_logs_takes_a_source_and_a_line_count(config, monkeypatch):
+    from jambu_gpu.core.engine import Engine
+
+    monkeypatch.chdir(config.project_dir)
+    seen = {}
+
+    def _read_logs(self, limit=200, source=None):
+        seen.update(limit=limit, source=source)
+        return (source or "runtime"), ["RuntimeError: driver too old"]
+
+    monkeypatch.setattr(Engine, "read_logs", _read_logs)
+    result = runner.invoke(app, ["--json", "logs", "--source", "onstart", "--lines", "7"])
+    assert result.exit_code == 0, result.output
+    assert seen == {"limit": 7, "source": "onstart"}
+    assert json.loads(result.stdout) == {
+        "source": "onstart",
+        "lines": ["RuntimeError: driver too old"],
+    }
+
+    result = runner.invoke(app, ["logs"])
+    assert result.exit_code == 0
+    assert seen == {"limit": 200, "source": None}
+    assert "driver too old" in result.stdout

@@ -155,16 +155,24 @@ def _guard(decision: dict, payload: dict) -> Text:
 def logs_command(
     ctx: typer.Context,
     lines: int = typer.Option(200, "--lines", "-n", help="How many lines to show."),
+    source: str = typer.Option(
+        "",
+        "--source",
+        "-s",
+        help="runtime | onstart | watchdog (read on the instance through the "
+        "watchdog) or provider (container log). Default: runtime when the "
+        "watchdog answers, else provider.",
+    ),
 ) -> None:
-    """Show provider-side container logs for the instance."""
+    """Show the instance's logs: the model server's by default."""
     context = get_context(ctx)
     try:
-        output = context.engine().logs(limit=lines)
+        used, output = context.engine().read_logs(limit=lines, source=source or None)
     except JambuError as exc:
         handle(exc)
         return
     if context.json:
-        print_json({"lines": output})
+        print_json({"source": used, "lines": output})
         return
     for line in output:
         console.print(line, markup=False, highlight=False)

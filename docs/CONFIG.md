@@ -65,7 +65,7 @@ for why this exists and `gpu profiles` / `gpu inspect-model
 | `verified_only` | `true` | Only rent verified machines. |
 | `min_reliability` | `0.95` | Minimum machine reliability score. |
 | `min_inet_down_mbps` | `100` | Minimum download bandwidth (model pulls are big). |
-| `min_cuda` | `12.1` | Minimum `cuda_max_good`. |
+| `min_cuda` | `12.1` | Floor for the host's `cuda_max_good` (the newest CUDA its driver runs). The search uses the higher of this and `compute.gpu.cuda_min`, and offers are re-checked client-side. |
 | `search_limit` | `24` | How many offers to consider. |
 | `order_by` / `order_dir` | `dph_total` / `asc` | Offer ranking — cheapest first. |
 | `image_login` | – | `-u user -p pass docker.io` for a private image. |
@@ -85,11 +85,11 @@ each number comes from.
 | `gpu.min_vram_gb` | `24` | Minimum VRAM **per GPU**. |
 | `gpu.count` | `1` | Number of GPUs on one machine. |
 | `gpu.name_filter` | – | Substring match, e.g. `A100`, `RTX 4090`. |
-| `gpu.cuda_min` | – | Minimum CUDA version. |
+| `gpu.cuda_min` | – | Minimum host CUDA version. `gpu` raises it to what the runtime image needs, read from its tag (`-cu129` means 12.9, vLLM's bare `v0.32+` and `latest` mean 13.0), so an image never lands on a driver too old to run it. |
 | `disk_gb` | `80` | Disk. Must fit the model weights plus the container. |
 | `region` | – | Comma-separated geolocations. |
 | `spot` | `false` | Use interruptible/bid capacity where supported. |
-| `image` | – | Override the runtime's container image. |
+| `image` | – | Override the runtime's container image. vLLM's default is `vllm/vllm-openai:v0.32.0-cu129`. Pin a tag: `validate` warns on `latest` or an untagged image, because the CUDA it needs can change under you. |
 
 ---
 

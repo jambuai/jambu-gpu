@@ -123,6 +123,8 @@ class Offer:
     hourly_cost_usd: float
     region: Optional[str] = None
     score: Optional[float] = None
+    # Highest CUDA version the host's driver supports, when the provider says.
+    cuda_max: Optional[float] = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 

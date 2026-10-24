@@ -385,6 +385,11 @@ def test_the_boot_script_reconstitutes_the_agent_byte_for_byte(tmp_path):
     try:
         subprocess.run(["bash", str(boot)], check=True, timeout=60)
         assert (root / "opt" / "watchdog.py").read_text() == source
+        # The config (it carries the token) travels deflated too, readable by root only.
+        written = root / "etc" / "watchdog.json"
+        assert json.loads(written.read_text()) == {"token": "t", "port": 8777}
+        assert written.stat().st_mode & 0o777 == 0o600
+        assert not list((root / "etc").glob("*.b64"))
     finally:
         kill_supervisor(root)
 
@@ -965,3 +970,161 @@ def test_the_token_compare_rejects_near_misses(agent_factory):
     conn.close()
     assert agent.client.try_state() is not None
     assert "hmac.compare_digest" in build_agent_source()
+
+
+# --- runtime liveness and instance logs --------------------------------------
+
+
+def _get(agent, path):
+    conn = http.client.HTTPConnection("127.0.0.1", agent.port, timeout=5)
+    conn.request("GET", path, headers={"X-Jambu-Token": agent.token})
+    response = conn.getresponse()
+    body = json.loads(response.read() or b"{}")
+    conn.close()
+    return response.status, body
+
+
+def _wait(predicate, timeout=15.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def test_logs_serves_the_tail_of_each_configured_log(agent_factory, tmp_path):
+    runtime_log = tmp_path / "vllm.log"
+    runtime_log.write_text("".join(f"line {i}\n" for i in range(5000)))
+    onstart_log = tmp_path / "onstart.log"
+    onstart_log.write_text("begin\ndone\n")
+    agent = agent_factory(
+        policy(idle_timeout_s=3600.0),
+        logs={
+            "runtime": str(runtime_log),
+            "onstart": str(onstart_log),
+            "watchdog": str(tmp_path / "missing.log"),
+        },
+    )
+
+    assert agent.client.logs("runtime", 3) == ["line 4997", "line 4998", "line 4999"]
+    status, body = _get(agent, "/logs?name=runtime")
+    assert status == 200 and body["name"] == "runtime"
+    assert len(body["lines"]) == 200 and body["lines"][-1] == "line 4999"
+    _, capped = _get(agent, "/logs?name=runtime&lines=999999")
+    assert len(capped["lines"]) == 2000 and capped["lines"][0] == "line 3000"
+    assert agent.client.logs("onstart", 50) == ["begin", "done"]
+    assert agent.client.logs("watchdog", 10) == []  # not written yet: empty, not an error
+    assert _get(agent, "/logs?name=passwd")[0] == 404
+    assert _get(agent, "/logs?name=runtime&lines=junk")[0] == 200
+
+    rogue = WatchdogClient(agent.client.base_url, "wrong", timeout=5.0)
+    with pytest.raises(Exception, match="token"):
+        rogue.logs("runtime", 5)
+
+
+def test_the_tail_is_read_from_the_end_of_a_large_file(tmp_path):
+    big = tmp_path / "big.log"
+    with open(big, "w") as handle:
+        for i in range(200_000):
+            handle.write(f"{i:08d} " + "x" * 80 + "\n")
+    tail = agent_body.tail_lines(str(big), 3)
+    assert [line.split()[0] for line in tail] == ["00199997", "00199998", "00199999"]
+    assert agent_body.tail_lines(str(big), 0) == []
+    assert agent_body.tail_lines(str(tmp_path / "nope.log"), 5) == []
+    short = tmp_path / "short.log"
+    short.write_text("only\n")
+    assert agent_body.tail_lines(str(short), 10) == ["only"]
+
+
+def test_runtime_alive_follows_the_model_server_process(agent_factory, tmp_path):
+    pid_path = tmp_path / "vllm.pid"
+    agent = agent_factory(
+        policy(idle_timeout_s=3600.0),
+        startup_grace_s=600.0,
+        runtime_pid_path=str(pid_path),
+    )
+    state = agent.client.state()
+    assert state["runtime_alive"] is None  # no pid file yet: unknown, not dead
+    assert state["starting"] is True
+
+    server = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        pid_path.write_text(f"{server.pid}\n")
+        assert agent.client.state()["runtime_alive"] is True
+        assert agent.client.state()["starting"] is True
+    finally:
+        server.kill()
+        server.wait()
+
+    # A dead model server must not hold the startup grace open.
+    assert _wait(lambda: agent.client.state()["runtime_alive"] is False)
+    assert _wait(lambda: agent.client.state()["starting"] is False)
+    assert _wait(lambda: len(agent.records("runtime_exited")) == 1)
+    time.sleep(2.5)  # a few guard ticks later, still logged only once
+    assert len(agent.records("runtime_exited")) == 1
+    assert json.loads(agent.state_path.read_text())["starting"] is False
+
+
+def test_a_dead_model_server_lets_the_idle_rule_stop_the_machine(agent_factory, tmp_path):
+    pid_path = tmp_path / "vllm.pid"
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    pid_path.write_text(str(dead.pid))
+    agent = agent_factory(
+        policy(idle_timeout_s=2.0),
+        startup_grace_s=1500.0,
+        runtime_pid_path=str(pid_path),
+    )
+    assert agent.wait_for_marker()["action"] == "stop"
+    assert "runtime_exited" in agent.event_names()
+    assert "runtime_startup_grace_expired" not in agent.event_names()
+
+
+def test_a_pid_file_from_a_previous_session_is_not_trusted(agent_factory, tmp_path):
+    """Container disk survives a stop; the old pid file predates this start."""
+    pid_path = tmp_path / "vllm.pid"
+    pid_path.write_text("999999")
+    old = time.time() - 3600
+    os.utime(pid_path, (old, old))
+    agent = agent_factory(
+        policy(idle_timeout_s=3600.0),
+        startup_grace_s=600.0,
+        runtime_pid_path=str(pid_path),
+    )
+    time.sleep(1.5)
+    state = agent.client.state()
+    assert state["runtime_alive"] is None
+    assert state["starting"] is True
+    assert "runtime_exited" not in agent.event_names()
+
+
+def test_without_a_pid_path_liveness_is_unknown(agent_factory):
+    agent = agent_factory(policy(idle_timeout_s=3600.0), startup_grace_s=600.0)
+    assert agent.client.state()["runtime_alive"] is None
+
+
+def test_the_agent_config_names_the_runtime_files():
+    config = build_agent_config(
+        provider="test",
+        instance_id="",
+        token="t",
+        port=8777,
+        interval_s=60.0,
+        startup_grace_s=900.0,
+        policy=policy(),
+        created_at=0.0,
+        runtime_pid_path="/var/run/jambu/vllm.pid",
+        runtime_log_path="/var/log/jambu/vllm.log",
+    )
+    assert config["runtime_pid_path"] == "/var/run/jambu/vllm.pid"
+    assert config["logs"] == {
+        "runtime": "/var/log/jambu/vllm.log",
+        "onstart": "/var/log/jambu/onstart.log",
+        "watchdog": "/var/log/jambu/watchdog.log",
+    }
+    bare = build_agent_config(
+        provider="test", instance_id="", token="t", port=8777, interval_s=60.0,
+        startup_grace_s=900.0, policy=policy(), created_at=0.0,
+    )
+    assert "runtime_pid_path" not in bare and "runtime" not in bare["logs"]

@@ -14,11 +14,11 @@ from .. import watchdog as watchdog_pkg
 from ..providers.base import GPUProvider
 from ..providers.registry import load_builtin_providers
 from ..runtime import runtime_registry
-from ..runtime.base import ENDPOINT_NAME, ModelRuntime
+from ..runtime.base import ENDPOINT_NAME, ModelRuntime, image_tag, max_cuda
 from ..watchdog.builder import build_agent_config, build_agent_source, build_onstart_script
 from . import events as ev
 from . import policy
-from .beacon import WatchdogClient
+from .beacon import WatchdogClient, WatchdogUnavailable
 from .config import RuntimeConfig
 from .credentials import CredentialResolver
 from .errors import (
@@ -46,6 +46,11 @@ from .models import (
 from .state import RuntimeState, StateStore, WatchdogInfo, utc_now
 
 Echo = Callable[[str], None]
+
+# Where `gpu logs --source` reads from: the watchdog serves the instance files.
+LOG_SOURCES = ("runtime", "onstart", "watchdog", "provider")
+# Runtime log lines quoted in the error when the model server dies at boot.
+STARTUP_FAILURE_LOG_LINES = 30
 
 
 def _noop(_message: str) -> None:
@@ -177,6 +182,13 @@ class Engine:
             )
 
         result.merge(self.runtime.validate())
+        if cfg.runtime.engine != "none" and image_tag(self.runtime.image()) == "latest":
+            result.warn(
+                f"unpinned image '{self.runtime.image()}': the CUDA it needs can change "
+                "under you (pin a tag such as "
+                f"'{type(self.runtime).default_image}')",
+                "compute.image",
+            )
 
         if cfg.model.hf_token_env and not self.credentials.get(cfg.model.hf_token_env):
             result.warn(
@@ -186,7 +198,13 @@ class Engine:
 
         if check_provider:
             try:
-                result.merge(self.provider.validate(cfg))
+                # The provider previews offers from config alone; hand it the
+                # CUDA floor the runtime image adds, so validate sees what setup will.
+                checked = cfg
+                if self.cuda_min() != cfg.compute.gpu.cuda_min:
+                    checked = cfg.model_copy(deep=True)
+                    checked.compute.gpu.cuda_min = self.cuda_min()
+                result.merge(self.provider.validate(checked))
             except JambuError as exc:
                 result.error(str(exc), "provider")
         return result
@@ -332,7 +350,7 @@ class Engine:
                 min_vram_gb=cfg.compute.gpu.min_vram_gb,
                 count=cfg.compute.gpu.count,
                 name_filter=cfg.compute.gpu.name_filter,
-                cuda_min=cfg.compute.gpu.cuda_min,
+                cuda_min=self.cuda_min(),
             ),
             disk_gb=cfg.compute.disk_gb,
             image=self.runtime.image(),
@@ -345,6 +363,16 @@ class Engine:
             max_hourly_cost_usd=cfg.budget.max_hourly_cost_usd,
             provider_options=dict(cfg.provider.options),
         )
+
+    def cuda_min(self) -> Optional[str]:
+        """The stricter of compute.gpu.cuda_min and what the runtime image needs."""
+        configured = self.config.compute.gpu.cuda_min
+        needed = max_cuda(configured, self.runtime.required_cuda())
+        if needed is None:
+            return configured
+        if configured is not None and max_cuda(configured) == needed:
+            return configured
+        return f"{needed:.1f}"
 
     def _ports(self) -> list[int]:
         ports = list(self.runtime.ports())
@@ -377,6 +405,8 @@ class Engine:
             created_at=utc_now(),
             watchdog_spec=spec,
             activity_probe=probe,
+            runtime_pid_path=self.runtime.runtime_pid_path(),
+            runtime_log_path=self.runtime.runtime_log_path(),
         )
         return build_onstart_script(
             agent_source=agent_source,
@@ -698,7 +728,7 @@ class Engine:
                 return status.message or "the instance entered a failed state"
             if status.state is InstanceState.STOPPED:
                 return "the instance was stopped"
-            return None
+            return self._runtime_exited(state)
 
         wait_for_healthy(
             url,
@@ -716,6 +746,25 @@ class Engine:
             startup_seconds=round(time.time() - started, 1),
         )
         self.echo(f"+ runtime ready: {endpoint}")
+
+    def _runtime_exited(self, state: RuntimeState) -> Optional[str]:
+        """The watchdog saw the model server process die: say why, from its log."""
+        client = self.beacon(state)
+        if client is None:
+            return None
+        snapshot = client.try_state()
+        if not snapshot or snapshot.get("runtime_alive") is not False:
+            return None
+        reason = "the model server process exited on the instance"
+        try:
+            tail = client.logs("runtime", STARTUP_FAILURE_LOG_LINES)
+        except WatchdogUnavailable:
+            tail = []
+        if not tail:
+            return reason + " (its log is empty or unreadable)"
+        return reason + ". Last lines of its log:\n" + "\n".join(
+            "  " + line for line in tail
+        )
 
     # ------------------------------------------------------------------
     # run (spec section 16)
@@ -1012,13 +1061,37 @@ class Engine:
     # logs
     # ------------------------------------------------------------------
 
-    def logs(self, limit: int = 200) -> list[str]:
+    def logs(self, limit: int = 200, source: Optional[str] = None) -> list[str]:
+        return self.read_logs(limit, source)[1]
+
+    def read_logs(
+        self, limit: int = 200, source: Optional[str] = None
+    ) -> tuple[str, list[str]]:
+        """(source used, lines). ``source`` None means the runtime log when the
+        watchdog can serve it, else the provider's container log."""
+        if source is not None and source not in LOG_SOURCES:
+            raise ConfigError(
+                f"unknown log source '{source}' (choose from {', '.join(LOG_SOURCES)})"
+            )
         with self.store.process_lock():
             state = self._reconcile(self.store.load())
             self.store.save(state)
         if not state.instance:
             raise StateError("no instance to read logs from")
+        if source != "provider":
+            name = source or "runtime"
+            client = self.beacon(state)
+            try:
+                if client is None:
+                    raise WatchdogUnavailable("no watchdog installed on this instance")
+                return name, client.logs(name, limit)
+            except WatchdogUnavailable as exc:
+                if source is not None:
+                    raise StateError(
+                        f"cannot read the {source} log: {exc}. "
+                        "`gpu logs --source provider` shows the container log instead."
+                    ) from exc
         self.provider.require_capability("logs")
         stream = self.provider.logs(state.instance)
         lines = list(stream)
-        return lines[-limit:]
+        return "provider", lines[-limit:]

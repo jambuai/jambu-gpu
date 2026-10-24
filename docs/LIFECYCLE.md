@@ -81,6 +81,14 @@ Run the same rule from anywhere that has API access:
 
 Inference traffic is counted on the instance only. When the watchdog is enabled and installed but did not answer during this reconcile, `guard` therefore does not apply `idle_timeout`: its local idle clock would stop an endpoint that is busy serving requests. `max_lifetime`, the session budget and `stopped_ttl` still apply, and the decision detail records `idle_skipped: watchdog_unreachable`. With `lifecycle.watchdog.enabled: false` the CLI guard owns the idle rule as before.
 
+## A model server that dies at boot
+
+The runtime start command writes the model server's pid to `/var/run/jambu/vllm.pid`. `GET /state` reports `runtime_alive`: `true` or `false` from that pid, `null` while there is no pid file yet (or only one older than the current container start). If the process is gone while the instance is still starting, the watchdog logs `runtime_exited` once and ends startup, so the idle rules apply instead of a startup grace (`startup_timeout` + 5 minutes) kept open by a dead server.
+
+`gpu setup` asks the watchdog on every readiness poll. When `runtime_alive` is `false` it fails at once with the last 30 lines of the model server's log in the error (a CUDA driver mismatch, an out-of-memory, a bad flag), and `cleanup_on_setup_failure` destroys the instance.
+
+`GET /logs?name=runtime|onstart|watchdog&lines=N` (authenticated, default 200, at most 2000) serves the tail of those files without SSH. `gpu logs` reads it.
+
 ## The watchdog credential
 
 The watchdog stops its own machine, so it needs provider API access. `VAST_API_KEY` is written on the instance at `/etc/jambu/watchdog.json` (mode 600).

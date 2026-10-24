@@ -10,6 +10,7 @@ Contract with the CLI (all routes require ``X-Jambu-Token``):
     GET  /health              -> liveness
     GET  /state               -> snapshot + current policy decision
     GET  /events?limit=N      -> structured events recorded on the instance
+    GET  /logs?name=X&lines=N -> tail of a configured log (runtime|onstart|watchdog)
     POST /activity            -> generic activity mark
     POST /ready               -> model server finished starting
     POST /workload/start      -> {id, label}
@@ -49,6 +50,7 @@ import threading
 import time
 import traceback
 import urllib.request
+from urllib.parse import parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CONFIG_PATH = os.environ.get("JAMBU_WATCHDOG_CONFIG", "/etc/jambu/watchdog.json")
@@ -68,6 +70,7 @@ _PROBE = {}
 # API outage: losing the disk to a 3-minute blip is worse than 30 more minutes.
 ESCALATE_AFTER_S = 1800.0
 PROBE_ERROR_LOG_EVERY_S = 600.0
+LOG_LINES_MAX = 2000
 
 
 # --------------------------------------------------------------------------
@@ -233,6 +236,12 @@ def snapshot(now=None):
             for key, value in (_STATE.get("workloads") or {}).items()
         ]
         starting = bool(_STATE.get("starting"))
+        if starting and runtime_alive() is False:
+            # A dead model server must not hold the startup grace open.
+            starting = False
+            _STATE["starting"] = False
+            log_event("runtime_exited", pid_path=_CONFIG.get("runtime_pid_path"))
+            save_state()
         if starting:
             grace = float(_CONFIG.get("startup_grace_s") or 900.0)
             began = _STATE.get("session_started_at") or _STATE.get("created_at") or now
@@ -253,6 +262,50 @@ def snapshot(now=None):
             provider_state="ready",
             session_started_at=_STATE.get("session_started_at"),
         )
+
+
+def runtime_alive():
+    """True/False for the model server process; None until it wrote a pid file.
+
+    A pid file older than this container start is a previous session's.
+    """
+    path = _CONFIG.get("runtime_pid_path")
+    if not path:
+        return None
+    try:
+        if os.stat(path).st_mtime < float(_STATE.get("session_started_at") or 0) - 5:
+            return None
+        with open(path) as handle:
+            pid = int(handle.read().strip())
+    except (OSError, ValueError):
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    try:
+        with open("/proc/%d/stat" % pid) as handle:
+            return handle.read().rsplit(")", 1)[1].split()[0] not in ("Z", "X")
+    except (OSError, IndexError):
+        return True
+
+
+def tail_lines(path, count):
+    """The last ``count`` lines of ``path``, reading backwards from its end."""
+    try:
+        with open(path, "rb") as handle:
+            pos = handle.seek(0, 2)
+            data = b""
+            while pos > 0 and data.count(b"\n") <= count:
+                step = min(65536, pos)
+                pos -= step
+                handle.seek(pos)
+                data = handle.read(step) + data
+    except OSError:
+        return []
+    return data.decode("utf-8", "replace").splitlines()[-count:] if count > 0 else []
 
 
 def build_context():
@@ -646,6 +699,20 @@ class Handler(BaseHTTPRequestHandler):
                     limit = 100
             self._reply(200, {"events": read_events(limit)})
             return
+        if path == "/logs":
+            query = parse_qs(self.path.partition("?")[2])
+            name = (query.get("name") or ["runtime"])[0]
+            target = (_CONFIG.get("logs") or {}).get(name)
+            if not target:
+                self._reply(404, {"error": "unknown log %r" % name})
+                return
+            try:
+                count = int((query.get("lines") or [200])[0])
+            except ValueError:
+                count = 200
+            count = max(0, min(count, LOG_LINES_MAX))
+            self._reply(200, {"name": name, "lines": tail_lines(target, count)})
+            return
         self._reply(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
@@ -672,6 +739,7 @@ def state_payload():
             "created_at": _STATE.get("created_at"),
             "last_activity": _STATE.get("last_activity"),
             "starting": snap.starting,
+            "runtime_alive": runtime_alive(),
             "locked": snap.lock_active(cfg),
             "locked_until": _STATE.get("locked_until"),
             "terminated": bool(_STATE.get("terminated")),

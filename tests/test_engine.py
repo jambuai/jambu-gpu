@@ -369,3 +369,165 @@ def test_stopping_a_running_instance_freezes_the_cost_at_the_stop_point(write_co
 def test_setup_starts_the_billable_clock_immediately_not_at_the_next_reconcile(engine):
     state = engine.setup(wait=False)
     assert engine.store.load().running_since is not None
+
+
+# -- the runtime image sets the CUDA floor ------------------------------------
+
+
+def _engine(write_config, **overrides):
+    config = write_config(**overrides)
+    return Engine(config, provider=FakeProvider(config, CredentialResolver(config.project_dir)))
+
+
+def test_the_spec_asks_for_the_cuda_the_image_needs(write_config):
+    assert _engine(write_config).build_spec().gpu.cuda_min == "12.9"
+    latest = _engine(write_config, compute={"image": "vllm/vllm-openai:latest"})
+    assert latest.build_spec().gpu.cuda_min == "13.0"
+
+
+def test_a_stricter_configured_cuda_floor_wins_and_a_looser_one_loses(write_config):
+    strict = _engine(write_config, compute={"gpu": {"cuda_min": "13.1"}})
+    assert strict.build_spec().gpu.cuda_min == "13.1"
+    loose = _engine(write_config, compute={"gpu": {"cuda_min": "12.1"}})
+    assert loose.build_spec().gpu.cuda_min == "12.9"
+
+
+def test_an_image_of_unknown_cuda_keeps_the_configured_floor(write_config):
+    custom = {"image": "someone/server:v2"}
+    assert _engine(write_config, compute=custom).build_spec().gpu.cuda_min is None
+    pinned = dict(custom, gpu={"cuda_min": "12.4"})
+    assert _engine(write_config, compute=pinned).build_spec().gpu.cuda_min == "12.4"
+
+
+def test_validate_warns_about_an_unpinned_image(write_config):
+    for image in ("vllm/vllm-openai:latest", "vllm/vllm-openai"):
+        result = _engine(write_config, compute={"image": image}).validate(check_provider=False)
+        assert any("unpinned image" in issue.message for issue in result.warnings), image
+    pinned = _engine(write_config).validate(check_provider=False)
+    assert not any("unpinned image" in issue.message for issue in pinned.warnings)
+
+
+def test_validate_previews_offers_with_the_image_cuda_floor(write_config):
+    engine = _engine(write_config)
+    seen = {}
+
+    def _validate(config):
+        seen["cuda_min"] = config.compute.gpu.cuda_min
+        from jambu_gpu.core.models import ValidationResult
+
+        return ValidationResult()
+
+    engine.provider.validate = _validate
+    engine.validate()
+    assert seen["cuda_min"] == "12.9"
+    assert engine.config.compute.gpu.cuda_min is None  # the loaded config is untouched
+
+
+def test_the_watchdog_learns_the_runtimes_pid_and_log(engine, monkeypatch):
+    import json
+    import re
+    import base64
+    import zlib
+
+    script = engine._build_onstart("t" * 43)
+    blob = re.search(r"echo (\S+) > /etc/jambu/watchdog.json.b64", script).group(1)
+    config = json.loads(zlib.decompress(base64.b64decode(blob)))
+    assert config["runtime_pid_path"] == "/var/run/jambu/vllm.pid"
+    assert config["logs"] == {
+        "runtime": "/var/log/jambu/vllm.log",
+        "onstart": "/var/log/jambu/onstart.log",
+        "watchdog": "/var/log/jambu/watchdog.log",
+    }
+
+
+# -- a model server that died at boot fails setup fast, with its log ----------
+
+
+class _DeadRuntimeWatchdog:
+    """A reachable watchdog reporting that the model server process is gone."""
+
+    def __init__(self, alive=False):
+        self.alive = alive
+        self.log_requests = []
+
+    def ping(self):
+        return True
+
+    def identify(self, *_args, **_kwargs):
+        return {"ok": True}
+
+    def mark_starting(self):
+        return {"ok": True}
+
+    def mark_ready(self):
+        return {"ok": True}
+
+    def try_state(self):
+        return {"starting": False, "runtime_alive": self.alive, "terminated": False}
+
+    def events(self, limit=100):
+        return []
+
+    def logs(self, name="runtime", lines=200):
+        self.log_requests.append((name, lines))
+        return [
+            "INFO starting vLLM API server",
+            "RuntimeError: The NVIDIA driver on your system is too old "
+            "(found version 12020). cuda>=13.0 required.",
+        ][-lines:]
+
+
+def test_a_dead_model_server_aborts_setup_with_its_log_and_cleans_up(engine, monkeypatch):
+    import time as _time
+
+    from jambu_gpu.core.errors import RuntimeStartupError
+
+    watchdog = _DeadRuntimeWatchdog()
+    monkeypatch.setattr(engine, "beacon", lambda _state: watchdog)
+    started = _time.time()
+    with pytest.raises(RuntimeStartupError) as caught:
+        engine.setup()
+    assert _time.time() - started < 10, "must not wait out the 10m startup timeout"
+    message = str(caught.value)
+    assert "model server process exited" in message
+    assert "NVIDIA driver on your system is too old" in message
+    assert watchdog.log_requests == [("runtime", 30)]
+    # cleanup_on_setup_failure: the dead instance is not left billing
+    assert any(call[0] == "destroy" for call in engine.provider.calls)
+    assert engine.store.load().instance_id is None
+
+
+def test_an_unknown_runtime_liveness_does_not_abort(engine, monkeypatch):
+    """None (no pid file yet) and True keep waiting on the health probe."""
+    for alive in (None, True):
+        watchdog = _DeadRuntimeWatchdog(alive=alive)
+        monkeypatch.setattr(engine, "beacon", lambda _state, w=watchdog: w)
+        state = engine.setup(wait=False)
+        assert engine._runtime_exited(state) is None
+        assert watchdog.log_requests == []
+
+
+# -- gpu logs: the instance's own files through the watchdog -----------------
+
+
+def test_logs_default_to_the_runtime_log_when_the_watchdog_answers(engine, monkeypatch):
+    engine.setup(wait=False)
+    watchdog = _DeadRuntimeWatchdog()
+    monkeypatch.setattr(engine, "beacon", lambda _state: watchdog)
+    source, lines = engine.read_logs(limit=1)
+    assert source == "runtime"
+    assert lines == [watchdog.logs()[-1]]
+    assert engine.read_logs(limit=5, source="onstart")[0] == "onstart"
+    assert watchdog.log_requests[-1] == ("onstart", 5)
+    assert engine.read_logs(source="provider") == ("provider", ["line one", "line two"])
+
+
+def test_logs_fall_back_to_the_provider_when_the_watchdog_is_unreachable(engine):
+    from jambu_gpu.core.errors import StateError
+
+    engine.setup(wait=False)  # the fake's watchdog endpoint refuses connections
+    assert engine.read_logs() == ("provider", ["line one", "line two"])
+    with pytest.raises(StateError, match="cannot read the watchdog log"):
+        engine.read_logs(source="watchdog")
+    with pytest.raises(ConfigError, match="unknown log source"):
+        engine.read_logs(source="kernel")

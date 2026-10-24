@@ -117,3 +117,66 @@ def test_unknown_provider_options_are_rejected_early():
 
     with pytest.raises(ValueError):
         VastOptions.from_mapping({"nonsense": 1})
+
+
+# -- CUDA: the image's floor and the adapter's floor, whichever is higher -----
+
+
+def _spec(cuda_min=None):
+    return ComputeSpec(gpu=GpuSpec(min_vram_gb=24, cuda_min=cuda_min), disk_gb=80)
+
+
+def _offer(cuda):
+    raw = {"id": 1, "gpu_name": "RTX 4090", "num_gpus": 1, "gpu_ram": 24564,
+           "disk_space": 100, "dph_total": 0.3, "cuda_max_good": cuda}
+    return mapper.map_offer(raw)
+
+
+def test_offers_carry_the_hosts_cuda_ceiling():
+    assert _offer(12.2).cuda_max == 12.2
+    assert _offer(None).cuda_max is None
+
+
+def test_the_search_asks_for_the_stricter_cuda_floor():
+    options = VastOptions()  # min_cuda 12.1
+    assert mapper.build_search_query(_spec(), options)["cuda_max_good"] == {"gte": 12.1}
+    assert mapper.build_search_query(_spec("12.9"), options)["cuda_max_good"] == {"gte": 12.9}
+    strict = VastOptions(min_cuda=13.0)
+    assert mapper.build_search_query(_spec("12.9"), strict)["cuda_max_good"] == {"gte": 13.0}
+    loose = VastOptions(min_cuda=0)
+    assert "cuda_max_good" not in mapper.build_search_query(_spec(), loose)
+
+
+def test_a_host_whose_driver_is_too_old_for_the_image_is_rejected_client_side():
+    """Caught on a live run: a CUDA 13 image landed on a 12.2 driver and died."""
+    spec = _spec("12.9")
+    assert not mapper.offer_matches(_offer(12.2), spec)
+    assert mapper.offer_matches(_offer(12.9), spec)
+    assert mapper.offer_matches(_offer(13.0), spec)
+    assert mapper.offer_matches(_offer(None), spec)  # unknown: trust the server filter
+    # the adapter's own floor counts too
+    assert not mapper.offer_matches(_offer(12.9), spec, min_cuda=13.0)
+    assert mapper.offer_matches(_offer(12.0), _spec())
+
+
+def test_find_offers_applies_the_effective_floor(monkeypatch):
+    from jambu_gpu.providers.vast.provider import VastProvider
+
+    provider = VastProvider.__new__(VastProvider)
+    provider.options = VastOptions(min_cuda=12.1)
+    seen = {}
+
+    class _Client:
+        def search_offers(self, query):
+            seen["query"] = query
+            return [
+                {"id": 1, "gpu_name": "A", "num_gpus": 1, "gpu_ram": 24564,
+                 "disk_space": 100, "dph_total": 0.2, "cuda_max_good": 12.2},
+                {"id": 2, "gpu_name": "B", "num_gpus": 1, "gpu_ram": 24564,
+                 "disk_space": 100, "dph_total": 0.3, "cuda_max_good": 12.9},
+            ]
+
+    monkeypatch.setattr(VastProvider, "client", property(lambda self: _Client()))
+    offers = provider.find_offers(_spec("12.9"))
+    assert [o.id for o in offers] == ["2"]
+    assert seen["query"]["cuda_max_good"] == {"gte": 12.9}

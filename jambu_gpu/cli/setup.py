@@ -132,6 +132,7 @@ def offers_command(
             "disk_gb": o.disk_gb,
             "hourly_cost_usd": o.hourly_cost_usd,
             "region": o.region,
+            "cuda_max": o.cuda_max,
         }
         for o in offers
     ]

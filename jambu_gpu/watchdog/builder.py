@@ -24,6 +24,7 @@ CONFIG_REMOTE_PATH = "/etc/jambu/watchdog.json"
 STATE_REMOTE_PATH = "/var/lib/jambu/activity.json"
 EVENTS_REMOTE_PATH = "/var/log/jambu/events.jsonl"
 WATCHDOG_LOG_PATH = "/var/log/jambu/watchdog.log"
+ONSTART_LOG_PATH = "/var/log/jambu/onstart.log"
 SUPERVISOR_PID_PATH = "/var/run/jambu/watchdog.pid"
 SUPERVISOR_RESPAWN_DELAY_S = 5
 
@@ -110,13 +111,21 @@ def build_agent_config(
     created_at: float,
     watchdog_spec: Optional[WatchdogSpec] = None,
     activity_probe: Optional[dict] = None,
+    runtime_pid_path: Optional[str] = None,
+    runtime_log_path: Optional[str] = None,
 ) -> dict:
     """Config the remote agent reads at boot.
 
     ``activity_probe`` lets inference traffic that bypasses `gpu run` count as
     activity, e.g. ``{"kind": "prometheus", "url": ".../metrics",
     "gauges": [...], "counters": [...]}``.
+
+    ``runtime_pid_path`` lets the agent tell a dead model server from a slow
+    one; ``logs`` names the files its ``/logs`` route may serve.
     """
+    logs = {"onstart": ONSTART_LOG_PATH, "watchdog": WATCHDOG_LOG_PATH}
+    if runtime_log_path:
+        logs["runtime"] = runtime_log_path
     config = {
         "provider": provider,
         "instance_id": instance_id,
@@ -128,23 +137,24 @@ def build_agent_config(
         "policy": policy.to_dict(),
         "env": dict(watchdog_spec.env) if watchdog_spec else {},
         "provider_context": dict(watchdog_spec.context) if watchdog_spec else {},
+        "logs": logs,
     }
+    if runtime_pid_path:
+        config["runtime_pid_path"] = runtime_pid_path
     if activity_probe:
         config["activity_probe"] = dict(activity_probe)
     return config
 
 
-def _b64(text: str) -> str:
-    return base64.b64encode(text.encode()).decode()
-
-
 def _b64_gz_block(text: str, width: int = 76) -> str:
-    """Compressed, line-wrapped payload.
+    """Compressed, line-wrapped payload (``width=0``: one line).
 
     The boot script travels inside a provider API field, so the ~29 KB agent is
     deflated to ~9 KB and wrapped, instead of riding on one enormous line.
     """
     blob = base64.b64encode(zlib.compress(text.encode(), 9)).decode()
+    if not width:
+        return blob
     return "\n".join(blob[i : i + width] for i in range(0, len(blob), width))
 
 
@@ -167,7 +177,7 @@ def build_onstart_script(
         "set -u",
         # mkdir first: a failed `exec` redirect would kill a non-interactive shell.
         "mkdir -p /etc/jambu /var/lib/jambu /var/log/jambu /var/run/jambu /opt/jambu",
-        "exec >> /var/log/jambu/onstart.log 2>&1",
+        f"exec >> {ONSTART_LOG_PATH} 2>&1",
         "date -u +'[%Y-%m-%dT%H:%M:%SZ] jambu onstart begin'",
     ]
 
@@ -176,11 +186,14 @@ def build_onstart_script(
         lines.append(f"echo {_shell_quote(f'{key}={value}')} >> /etc/jambu/runtime.env")
 
     if watchdog_enabled:
+        # Config and agent both travel deflated; the config carries the token,
+        # so it is written under a 077 umask.
         decode = (
-            "import base64,zlib;"
-            f"open({AGENT_REMOTE_PATH!r},'wb').write("
-            f"zlib.decompress(base64.b64decode(open('{AGENT_REMOTE_PATH}.b64','rb').read())))"
+            "import base64,os,zlib;os.umask(0o77);"
+            f"[open(p,'wb').write(zlib.decompress(base64.b64decode(open(p+'.b64','rb').read())))"
+            f" for p in ({CONFIG_REMOTE_PATH!r},{AGENT_REMOTE_PATH!r})]"
         )
+        config_json = json.dumps(agent_config, separators=(",", ":"))
         # Killing the supervisor pid must still take the watchdog down with it:
         # the agent runs in the background so `wait` lets the TERM trap fire.
         supervisor = (
@@ -199,17 +212,17 @@ def build_onstart_script(
         lines += [
             "",
             "# --- lifecycle watchdog (survives local CLI death) ---",
-            f"echo {_b64(json.dumps(agent_config))} | base64 -d > {CONFIG_REMOTE_PATH}",
-            f"chmod 600 {CONFIG_REMOTE_PATH}",
             "PYBIN=$(command -v python3 || command -v python)",
             'if [ -z "$PYBIN" ]; then',
             '  echo "jambu: no python interpreter in this image; watchdog NOT installed"',
             "else",
+            f"  (umask 077; echo {_b64_gz_block(config_json, width=0)} > {CONFIG_REMOTE_PATH}.b64)",
             f"  cat > {AGENT_REMOTE_PATH}.b64 <<'JAMBU_AGENT_EOF'",
             _b64_gz_block(agent_source),
             "JAMBU_AGENT_EOF",
             f'  "$PYBIN" -c {_shell_quote(decode)}',
-            f"  rm -f {AGENT_REMOTE_PATH}.b64",
+            f"  rm -f {CONFIG_REMOTE_PATH}.b64 {AGENT_REMOTE_PATH}.b64",
+            f"  chmod 600 {CONFIG_REMOTE_PATH}",
             f"  chmod 700 {AGENT_REMOTE_PATH}",
             # One id per container start: the agent tells a restart (new
             # session, re-arm the guard) from a respawn (same session, keep state).

@@ -19,7 +19,7 @@ Operator reference. The project front page is the [README](../README.md). Field-
 | `gpu unlock` | Resume normal lifecycle rules |
 | `gpu stop` | Stop compute. Idempotent |
 | `gpu destroy` | Destroy the remote resource. Idempotent |
-| `gpu logs` | Provider-side container logs |
+| `gpu logs` | The model server's log on the instance (`--source runtime\|onstart\|watchdog\|provider`, `--lines N`). Falls back to the provider's container log when the watchdog does not answer |
 | `gpu events` | Structured lifecycle event log |
 | `gpu guard` | Evaluate and enforce the lifecycle rule from cron or CI |
 | `gpu ls` | Every jambu instance in the provider account, and which registered project owns it |

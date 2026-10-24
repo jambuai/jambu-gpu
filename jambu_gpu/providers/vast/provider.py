@@ -238,7 +238,8 @@ class VastProvider(GPUProvider):
             raw_offers = self.client.search_offers(query)
 
         offers = [mapper.map_offer(raw) for raw in raw_offers]
-        offers = [o for o in offers if mapper.offer_matches(o, spec)]
+        min_cuda = mapper.effective_min_cuda(spec, self.options)
+        offers = [o for o in offers if mapper.offer_matches(o, spec, min_cuda)]
         offers.sort(key=lambda o: o.hourly_cost_usd)
         return offers[:limit]
 

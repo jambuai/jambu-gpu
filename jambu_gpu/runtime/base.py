@@ -8,14 +8,56 @@ These stay independent; a runtime never talks to a provider API.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
-from typing import Optional, Type
+from typing import Any, Optional, Type
 
 from ..core.config import RuntimeConfig
 from ..core.errors import ConfigError
 from ..core.models import ValidationResult
 
 ENDPOINT_NAME = "model"
+
+# `-cu129` -> 12.9, `cu130` -> 13.0, `-cuda12.1-` -> 12.1: the CUDA toolkit an
+# image tag was built for.
+_CU_TAG = re.compile(r"(?:^|[-_.])cu(\d{2})(\d)(?![0-9])")
+_CUDA_TAG = re.compile(r"cuda(\d+)\.(\d+)")
+
+
+def image_tag(image: str) -> str:
+    """The tag of ``repo[:tag][@digest]``; an untagged reference means ``latest``."""
+    name = image.split("@", 1)[0]
+    last = name.rsplit("/", 1)[-1]
+    return last.split(":", 1)[1] if ":" in last else "latest"
+
+
+def image_repo(image: str) -> str:
+    name = image.split("@", 1)[0]
+    head, _, last = name.rpartition("/")
+    last = last.split(":", 1)[0]
+    return f"{head}/{last}" if head else last
+
+
+def cuda_from_tag(tag: str) -> Optional[float]:
+    match = _CU_TAG.search(tag) or _CUDA_TAG.search(tag)
+    if not match:
+        return None
+    return float(f"{int(match.group(1))}.{match.group(2)}")
+
+
+def parse_cuda(value: Any) -> Optional[float]:
+    """``"12.4"`` / ``12.4`` / ``None`` -> float or None (garbage is None)."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def max_cuda(*values: Any) -> Optional[float]:
+    known = [v for v in (parse_cuda(x) for x in values) if v is not None]
+    return max(known) if known else None
 
 
 class ModelRuntime(ABC):
@@ -59,6 +101,24 @@ class ModelRuntime(ABC):
         None means the runtime exposes no such signal; only workloads, startup
         and locks then count as activity.
         """
+        return None
+
+    def required_cuda(self) -> Optional[float]:
+        """Minimum host CUDA (driver) version the image needs, None if unknown.
+
+        The offer filter is raised to this, so an image built for a newer CUDA
+        is never placed on a host whose driver cannot run it.
+        """
+        return cuda_from_tag(image_tag(self.image()))
+
+    # -- on-instance liveness -------------------------------------------------
+
+    def runtime_pid_path(self) -> Optional[str]:
+        """File holding the model server's pid, for the watchdog's liveness check."""
+        return None
+
+    def runtime_log_path(self) -> Optional[str]:
+        """The model server's log on the instance, served by the watchdog's /logs."""
         return None
 
     def validate(self) -> ValidationResult:

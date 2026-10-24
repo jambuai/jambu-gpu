@@ -182,3 +182,55 @@ def test_runtimes_without_a_traffic_signal_have_no_probe(write_config):
     from jambu_gpu.runtime.base import NoRuntime
 
     assert NoRuntime(write_config(runtime={"engine": "none"})).activity_probe() is None
+
+
+# -- the image decides the CUDA floor ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "image,cuda",
+    [
+        ("vllm/vllm-openai:v0.32.0-cu129", 12.9),
+        ("vllm/vllm-openai:v0.32.0-cu130", 13.0),
+        ("vllm/vllm-openai:nightly-cu134", 13.4),
+        ("my.registry:5000/team/vllm:v1-cu128", 12.8),
+        # bare tags carry no suffix: the known table answers
+        ("vllm/vllm-openai:v0.32.0", 13.0),
+        ("vllm/vllm-openai:v0.33.1", 13.0),
+        ("docker.io/vllm/vllm-openai:v0.32.0", 13.0),
+        ("vllm/vllm-openai:latest", 13.0),
+        ("vllm/vllm-openai", 13.0),  # untagged means latest
+        # unknown stays unknown, never guessed
+        ("vllm/vllm-openai:v0.31.2", None),
+        ("vllm/vllm-openai:nightly", None),
+        ("someone/else:v0.40.0", None),
+        ("someone/else:latest", None),
+    ],
+)
+def test_the_cuda_a_vllm_image_needs_comes_from_its_tag(write_config, image, cuda):
+    runtime = VllmRuntime(write_config(compute={"image": image}))
+    assert runtime.required_cuda() == cuda
+
+
+def test_the_default_image_is_pinned_to_a_cuda_12_build(config):
+    runtime = VllmRuntime(config)
+    assert runtime.image() == "vllm/vllm-openai:v0.32.0-cu129"
+    assert runtime.required_cuda() == 12.9
+
+
+def test_vllm_declares_where_its_pid_and_log_live(config):
+    runtime = VllmRuntime(config)
+    assert runtime.runtime_pid_path() == "/var/run/jambu/vllm.pid"
+    assert runtime.runtime_log_path() == "/var/log/jambu/vllm.log"
+    command = runtime.start_command()
+    assert ">> /var/log/jambu/vllm.log 2>&1" in command
+    assert command.endswith("echo $! > /var/run/jambu/vllm.pid")
+
+
+def test_a_runtime_without_liveness_declares_nothing(write_config):
+    from jambu_gpu.runtime.base import NoRuntime
+
+    runtime = NoRuntime(write_config(runtime={"engine": "none"}))
+    assert runtime.runtime_pid_path() is None
+    assert runtime.runtime_log_path() is None
+    assert runtime.required_cuda() == 12.1  # pytorch/...-cuda12.1-...

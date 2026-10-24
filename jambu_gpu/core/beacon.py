@@ -9,6 +9,7 @@ and an unreachable watchdog is surfaced as a warning, not a crash.
 from __future__ import annotations
 
 from typing import Any, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -78,6 +79,14 @@ class WatchdogClient:
     def events(self, limit: int = 100) -> list[dict[str, Any]]:
         data = self.try_request("GET", f"/events?limit={limit}") or {}
         return data.get("events", [])
+
+    def logs(self, name: str = "runtime", lines: int = 200) -> list[str]:
+        """Tail of an instance log (runtime | onstart | watchdog).
+
+        Raises WatchdogUnavailable, so a caller can tell "empty" from "unreachable".
+        """
+        data = self._request("GET", f"/logs?name={quote(name)}&lines={int(lines)}")
+        return [str(line) for line in data.get("lines") or []]
 
     def identify(
         self, instance_id: str, hourly_cost_usd: Optional[float] = None
