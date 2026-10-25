@@ -61,6 +61,9 @@ _HOST_NETWORK_FAILURE = re.compile(
     r"Temporary failure in name resolution|Network is unreachable"
 )
 
+# A pull stuck retrying a layer: its countdown changes, but it is no progress.
+_PULL_RETRY = re.compile(r"\bretrying\b", re.IGNORECASE)
+
 # Where `gpu logs --source` reads from: the watchdog serves the instance files.
 LOG_SOURCES = ("runtime", "onstart", "watchdog", "provider")
 # Runtime log lines quoted in the error when the model server dies at boot.
@@ -72,6 +75,19 @@ READ_LOCK_WAIT_S = 3.0
 
 def _noop(_message: str) -> None:
     return None
+
+
+def _pull_progress(message: Optional[str]) -> Optional[str]:
+    """The provider's boot message when it shows the pull moving, else None.
+
+    Vast reports the image pull's latest line (``<layer>: Download complete``,
+    ``<layer>: Pull complete``). A new line means a layer moved; the same line,
+    no line, or a retry countdown means it did not.
+    """
+    text = (message or "").strip()
+    if not text or _PULL_RETRY.search(text):
+        return None
+    return text
 
 
 class Engine:
@@ -779,8 +795,13 @@ class Engine:
         instance = state.instance
         assert instance is not None
         boot_timeout = self.config.boot_timeout_s
+        stall_timeout = self.config.pull_stall_timeout_s
         deadline = time.time() + boot_timeout
         announced = False
+        # Live, healthy pulls printed a new line every 1-8 minutes; stalled ones
+        # froze (or retried one layer) until boot_timeout, 30 minutes per host.
+        progress: Optional[str] = None
+        progress_at = time.time()
         while time.time() < deadline:
             status = self.provider.status(instance)
             if not status.exists:
@@ -810,6 +831,18 @@ class Engine:
                 InstanceState.IDLE,
             ) and (have_ports or not ready_ports):
                 return current
+            moved = _pull_progress(status.message)
+            if moved is not None and moved != progress:
+                progress, progress_at = moved, time.time()
+            elif stall_timeout and time.time() - progress_at >= stall_timeout:
+                last = (status.message or "").strip().splitlines()
+                raise HostFailure(
+                    f"instance {instance.id}'s image pull made no progress for "
+                    f"{format_duration(stall_timeout)} (health.pull_stall_timeout)"
+                    + (f"; last: {last[-1][:160]}" if last else ""),
+                    reason=f"image pull stalled for {format_duration(stall_timeout)}",
+                    instance=current,
+                )
             if not announced:
                 announced = True
                 self.echo("  waiting for the machine to come up ...")

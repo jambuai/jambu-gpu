@@ -230,12 +230,17 @@ class HealthConfig(_Base):
     interval: str = "60s"
     # How long the machine may take to reach running (mostly the image pull).
     boot_timeout: str = "30m"
+    # How long that pull may go without progress before the host counts as
+    # stalled; a stalled pull never resumes, so waiting out boot_timeout
+    # only bills the dead host longer.
+    pull_stall_timeout: str = "10m"
     # How long the model server may then take to answer its health check.
     startup_timeout: str = "10m"
     path: str = "/health"
 
     _v_interval = _duration("interval")
     _v_boot = _duration("boot_timeout")
+    _v_stall = _duration("pull_stall_timeout")
     _v_startup = _duration("startup_timeout")
 
 
@@ -309,6 +314,10 @@ class RuntimeConfig(_Base):
     @property
     def boot_timeout_s(self) -> float:
         return parse_duration(self.health.boot_timeout) or 1800.0
+
+    @property
+    def pull_stall_timeout_s(self) -> Optional[float]:
+        return parse_duration(self.health.pull_stall_timeout)
 
     @property
     def startup_timeout_s(self) -> float:
@@ -579,6 +588,7 @@ gpu_runtime:
   health:
     interval: 60s
     boot_timeout: 30m
+    pull_stall_timeout: 10m
     startup_timeout: 10m
 
   budget:
@@ -628,6 +638,7 @@ lifecycle:
 health:
   interval: 60s
   boot_timeout: 30m
+  pull_stall_timeout: 10m
   startup_timeout: 10m
 
 budget:

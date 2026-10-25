@@ -77,6 +77,7 @@ gpu_runtime:
   health:
     interval: 60s
     boot_timeout: 30m
+    pull_stall_timeout: 10m   # a pull with no progress this long: replace the host
     startup_timeout: 10m
     path: /health
 

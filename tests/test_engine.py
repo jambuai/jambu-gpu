@@ -720,6 +720,78 @@ def test_a_stuck_image_pull_times_out_on_boot_timeout_not_startup_timeout(
     assert health_waits == [420.0]
 
 
+def _with_clock(monkeypatch, start=1_000_000.0):
+    """Make the boot wait's sleeps advance a fake clock: minutes in no time."""
+    clock = [start]
+    monkeypatch.setattr("jambu_gpu.core.engine.time.time", lambda: clock[0])
+    monkeypatch.setattr(
+        "jambu_gpu.core.engine.time.sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    return clock
+
+
+def test_a_frozen_image_pull_is_given_up_long_before_boot_timeout(write_config, monkeypatch):
+    """Live: three hosts froze on one pull line until the 30-minute boot_timeout."""
+    engine, lines, _ = _booting(write_config, monkeypatch)
+    clock = _with_clock(monkeypatch)
+    engine.provider.fail_first_hosts(1, how="loading")
+    engine.provider.boot_message = lambda poll: (
+        "995efd0b979d: Verifying Checksum" if poll < 20 else "067869a57bf4: Pull complete"
+    )
+    started = clock[0]
+
+    state = engine.setup()
+
+    assert state.instance.host_id == "m2"
+    assert "! host m1 failed (image pull stalled for 10m); trying another machine (2/3)" in lines
+    # Two minutes of progress, then ten without: replaced at about 12, not 30.
+    assert 12 * 60 <= clock[0] - started < 13 * 60
+    assert engine.provider.searches[-1] == ["m1"], "the stalled host is not rented again"
+
+
+def test_a_pull_retrying_one_layer_counts_as_stalled(write_config, monkeypatch):
+    engine, lines, _ = _booting(write_config, monkeypatch)
+    clock = _with_clock(monkeypatch)
+    engine.provider.fail_first_hosts(1, how="loading")
+    engine.provider.boot_message = lambda poll: (
+        f"60c68e5ca95a: Retrying in {1 + poll % 3} second{'s' if poll % 3 else ''}"
+    )
+    started = clock[0]
+
+    engine.setup()
+
+    assert "! host m1 failed (image pull stalled for 10m); trying another machine (2/3)" in lines
+    assert 10 * 60 <= clock[0] - started < 11 * 60
+
+
+def test_a_slow_pull_that_keeps_moving_waits_for_boot_timeout(write_config, monkeypatch):
+    """A new layer every 8 minutes is slow, not stuck: only boot_timeout ends it."""
+    engine, lines, _ = _booting(write_config, monkeypatch)
+    clock = _with_clock(monkeypatch)
+    engine.provider.fail_first_hosts(1, how="loading")
+    engine.provider.boot_message = lambda poll: f"layer{poll * 6 // 480}: Pull complete"
+    started = clock[0]
+
+    engine.setup()
+
+    assert "! host m1 failed (image pull timed out after 30m); trying another machine (2/3)" in lines
+    assert clock[0] - started >= 30 * 60
+
+
+def test_pull_stall_detection_can_be_turned_off(write_config, monkeypatch):
+    engine, lines, _ = _booting(
+        write_config, monkeypatch, health={"pull_stall_timeout": "off", "boot_timeout": "20m"}
+    )
+    _with_clock(monkeypatch)
+    engine.provider.fail_first_hosts(1, how="loading")
+    engine.provider.boot_message = lambda poll: "067869a57bf4: Pull complete"
+
+    engine.setup()
+
+    assert "! host m1 failed (image pull timed out after 20m); trying another machine (2/3)" in lines
+
+
 def test_a_model_server_that_dies_is_not_blamed_on_the_host(engine, monkeypatch):
     from jambu_gpu.core.errors import HostFailure, RuntimeStartupError
 

@@ -388,3 +388,11 @@ def test_host_attempts_and_boot_timeout_keep_the_instance_compatible(write_confi
     base = write_config().fingerprint()
     assert write_config(compute={"host_attempts": 5}).fingerprint() == base
     assert write_config(health={"boot_timeout": "40m"}).fingerprint() == base
+    assert write_config(health={"pull_stall_timeout": "5m"}).fingerprint() == base
+
+
+def test_pull_stall_timeout_defaults_to_ten_minutes_and_can_be_off(write_config):
+    assert write_config().pull_stall_timeout_s == 10 * 60
+    assert write_config(health={"pull_stall_timeout": "off"}).pull_stall_timeout_s is None
+    with pytest.raises(ConfigError, match="pull_stall_timeout"):
+        write_config(health={"pull_stall_timeout": "soon"})

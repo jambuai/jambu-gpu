@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from jambu_gpu.core.errors import CapacityUnavailableError, ProvisioningError
 from jambu_gpu.core.models import (
@@ -66,6 +66,10 @@ class FakeProvider(GPUProvider):
         # reaches running).
         self.failing_hosts: set[str] = set()
         self.host_failure = "failed"
+        # What a "loading" machine reports on its Nth status poll, as Vast
+        # reports the image pull's latest line.
+        self.boot_message: Optional[Callable[[int], str]] = None
+        self.boot_polls = 0
         self.rented_hosts: list[str] = []
         self.searches: list[list[str]] = []
 
@@ -169,6 +173,9 @@ class FakeProvider(GPUProvider):
         if stored is None:
             return InstanceStatus(state=InstanceState.DESTROYED, exists=False)
         message = ""
+        if stored.state is InstanceState.STARTING and self.boot_message is not None:
+            message = self.boot_message(self.boot_polls)
+            self.boot_polls += 1
         if stored.state is InstanceState.FAILED:
             message = (
                 'Error response from daemon: Get "https://registry-1.docker.io/v2/": '

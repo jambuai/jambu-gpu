@@ -205,6 +205,7 @@ judged by the sweep's own `--orphan-max-age` and `--stopped-ttl` flags. See
 | --- | --- | --- |
 | `interval` | `60s` | Probe interval while waiting for the runtime. |
 | `boot_timeout` | `30m` | How long the machine may take to reach running, mostly the image pull. Past it the host counts as failed and `setup` tries another (`compute.host_attempts`). |
+| `pull_stall_timeout` | `10m` | How long the image pull may go without progress (no new line from the provider, or only retries of a layer) before the host counts as failed and is replaced, without waiting out `boot_timeout`. Healthy pulls measured live showed a new line at least every 8 minutes; stalled ones never recovered. `off` disables it. |
 | `startup_timeout` | `10m` | Once the machine runs, how long the model server may take to answer. Raise it for very large models. |
 | `path` | `/health` | Health path on the model endpoint. |
 
