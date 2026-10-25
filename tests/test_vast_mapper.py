@@ -122,13 +122,18 @@ def test_unknown_provider_options_are_rejected_early():
 # -- CUDA: the image's floor and the adapter's floor, whichever is higher -----
 
 
-def _spec(cuda_min=None):
-    return ComputeSpec(gpu=GpuSpec(min_vram_gb=24, cuda_min=cuda_min), disk_gb=80)
+def _spec(cuda_min=None, compute_cap_min=None):
+    return ComputeSpec(
+        gpu=GpuSpec(min_vram_gb=24, cuda_min=cuda_min, compute_cap_min=compute_cap_min),
+        disk_gb=80,
+    )
 
 
-def _offer(cuda):
+def _offer(cuda, compute_cap=None):
     raw = {"id": 1, "gpu_name": "RTX 4090", "num_gpus": 1, "gpu_ram": 24564,
            "disk_space": 100, "dph_total": 0.3, "cuda_max_good": cuda}
+    if compute_cap is not None:
+        raw["compute_cap"] = compute_cap
     return mapper.map_offer(raw)
 
 
@@ -157,6 +162,33 @@ def test_a_host_whose_driver_is_too_old_for_the_image_is_rejected_client_side():
     # the adapter's own floor counts too
     assert not mapper.offer_matches(_offer(12.9), spec, min_cuda=13.0)
     assert mapper.offer_matches(_offer(12.0), _spec())
+
+
+def test_offers_carry_the_gpus_compute_capability():
+    # Vast reports compute_cap ×100 (860 = 8.6); we normalize it.
+    assert _offer(13.0, compute_cap=860).compute_cap == 8.6
+    assert _offer(13.0, compute_cap=700).compute_cap == 7.0
+    assert _offer(13.0).compute_cap is None
+
+
+def test_the_search_floors_the_gpu_architecture():
+    # ×100 the way Vast stores it: 8.0 -> 800.
+    opts = VastOptions()
+    assert mapper.build_search_query(_spec(compute_cap_min=8.0), opts)["compute_cap"] == {"gte": 800}
+    assert mapper.build_search_query(_spec(compute_cap_min=7.0), opts)["compute_cap"] == {"gte": 700}
+    assert "compute_cap" not in mapper.build_search_query(_spec(), opts)
+
+
+def test_a_gpu_too_old_for_the_image_is_rejected_client_side():
+    """Caught on a live run: a CUDA-13 vLLM image landed on a V100/GTX 1080
+    (whose driver cleared cuda_max_good) and crashed at engine startup."""
+    spec = _spec(compute_cap_min=8.0)
+    assert not mapper.offer_matches(_offer(13.0, compute_cap=700), spec)  # V100 (7.0)
+    assert not mapper.offer_matches(_offer(13.0, compute_cap=610), spec)  # GTX 1080 (6.1)
+    assert mapper.offer_matches(_offer(13.0, compute_cap=860), spec)      # RTX 3090 (8.6)
+    assert mapper.offer_matches(_offer(13.0, compute_cap=800), spec)      # exactly 8.0
+    assert mapper.offer_matches(_offer(13.0), spec)  # unknown: trust the server filter
+    assert mapper.offer_matches(_offer(13.0, compute_cap=700), _spec())   # no floor set
 
 
 def test_find_offers_applies_the_effective_floor(monkeypatch):

@@ -462,6 +462,18 @@ def test_an_image_of_unknown_cuda_keeps_the_configured_floor(write_config):
     assert _engine(write_config, compute=pinned).build_spec().gpu.cuda_min == "12.4"
 
 
+def test_the_spec_floors_the_gpu_architecture_the_runtime_needs(write_config):
+    # Default CUDA-13 vLLM image -> Ampere (8.0).
+    assert _engine(write_config).build_spec().gpu.compute_cap_min == 8.0
+
+
+def test_a_stricter_configured_compute_cap_wins_and_a_looser_one_loses(write_config):
+    strict = _engine(write_config, compute={"gpu": {"compute_cap_min": 8.9}})
+    assert strict.build_spec().gpu.compute_cap_min == 8.9  # e.g. force Ada
+    loose = _engine(write_config, compute={"gpu": {"compute_cap_min": 7.0}})
+    assert loose.build_spec().gpu.compute_cap_min == 8.0  # runtime floor still wins
+
+
 def test_validate_warns_about_an_unpinned_image(write_config):
     for image in ("vllm/vllm-openai:latest", "vllm/vllm-openai"):
         result = _engine(write_config, compute={"image": image}).validate(check_provider=False)

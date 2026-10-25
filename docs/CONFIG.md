@@ -86,6 +86,7 @@ each number comes from.
 | `gpu.count` | `1` | Number of GPUs on one machine. |
 | `gpu.name_filter` | – | Substring match, e.g. `A100`, `RTX 4090`. |
 | `gpu.cuda_min` | – | Minimum host CUDA version. `gpu` raises it to what the runtime image needs, read from its tag (`-cu129` means 12.9, vLLM's bare `v0.32+` and `latest` mean 13.0), so an image never lands on a driver too old to run it. |
+| `gpu.compute_cap_min` | – | Minimum GPU **compute capability** (architecture), e.g. `8.0` for Ampere. Distinct from `cuda_min`: a Pascal (GTX 10xx, 6.1) or Volta (V100, 7.0) card can sit behind a modern CUDA-13 driver — clearing `cuda_min` — yet still be too old for a runtime image whose kernels are built for newer architectures, which then crashes at engine startup. `gpu` raises this to what the runtime needs: a CUDA-13 vLLM image floors it at `8.0` (those wheels drop Volta), a CUDA-12 vLLM image at `7.0`. The cheapest Vast offers are often exactly these old cards, so without the floor the search keeps picking a GPU the image cannot run. |
 | `disk_gb` | `80` | Disk. Must fit the model weights plus the container. |
 | `region` | – | Comma-separated geolocations. |
 | `spot` | `false` | Use interruptible/bid capacity where supported. |

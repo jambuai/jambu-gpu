@@ -91,6 +91,11 @@ class GpuSpec:
     count: int = 1
     name_filter: Optional[str] = None
     cuda_min: Optional[str] = None
+    # Minimum GPU compute capability (architecture), e.g. 8.0 for Ampere. The
+    # host driver's CUDA (``cuda_min``) is not the same thing: a Pascal/Volta
+    # card can sit behind a CUDA-13 driver yet still be too old for a runtime
+    # image built for newer architectures, which then dies at engine startup.
+    compute_cap_min: Optional[float] = None
 
 
 @dataclass
@@ -127,6 +132,9 @@ class Offer:
     score: Optional[float] = None
     # Highest CUDA version the host's driver supports, when the provider says.
     cuda_max: Optional[float] = None
+    # The GPU's compute capability (architecture), e.g. 8.6 for an RTX 3090,
+    # when the provider says. Distinct from cuda_max (the driver's CUDA).
+    compute_cap: Optional[float] = None
     # The physical machine behind the offer, when the provider says. Offers
     # on one machine share its network, disk and Docker daemon.
     host_id: Optional[str] = None

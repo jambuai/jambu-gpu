@@ -82,6 +82,12 @@ def _float_or_none(value: Any) -> Optional[float]:
         return None
 
 
+def _compute_cap(value: Any) -> Optional[float]:
+    """Vast's ``compute_cap`` is capability ×100 (860 → 8.6); normalize it."""
+    raw = _float_or_none(value)
+    return raw / 100.0 if raw else None
+
+
 def effective_min_cuda(spec: ComputeSpec, options: VastOptions) -> Optional[float]:
     """The stricter of the adapter's floor and what the spec (image) needs."""
     known = [
@@ -110,6 +116,8 @@ def map_offer(raw: dict[str, Any]) -> Offer:
         score=float(raw.get("score") or 0.0) if raw.get("score") is not None else None,
         # Highest CUDA the host driver runs; an image needing more dies at boot.
         cuda_max=_float_or_none(raw.get("cuda_max_good")),
+        # Vast reports compute capability ×100 (860 = 8.6); normalize to 8.6.
+        compute_cap=_compute_cap(raw.get("compute_cap")),
         host_id=host_id(raw),
         raw=raw,
     )
@@ -193,6 +201,12 @@ def build_search_query(
     min_cuda = effective_min_cuda(spec, options)
     if min_cuda:
         query["cuda_max_good"] = {"gte": min_cuda}
+    # Floor the GPU architecture, not just the driver's CUDA: Vast reports
+    # compute capability ×100, so 8.0 -> 800. Without this the cheapest offers
+    # (old Volta/Pascal cards behind modern drivers) pass cuda_max_good but
+    # crash a newer runtime image at engine startup.
+    if spec.gpu.compute_cap_min:
+        query["compute_cap"] = {"gte": int(round(float(spec.gpu.compute_cap_min) * 100))}
     # gpu_name is deliberately NOT sent server-side: Vast's field only
     # accepts an exact match ({"eq": ...}), but name_filter is documented and
     # used everywhere else (offer_matches below) as a case-insensitive
@@ -257,6 +271,10 @@ def offer_matches(offer: Offer, spec: ComputeSpec, min_cuda: Optional[float] = N
         min_cuda = _float_or_none(spec.gpu.cuda_min)
     # 1e-6: 12.9 must match a host reporting exactly 12.9.
     if min_cuda and offer.cuda_max is not None and offer.cuda_max + 1e-6 < min_cuda:
+        return False
+    # Vast's compute_cap filter is advisory; verify the architecture floor too.
+    min_cc = spec.gpu.compute_cap_min
+    if min_cc and offer.compute_cap is not None and offer.compute_cap + 1e-6 < float(min_cc):
         return False
     if offer.gpu_count < spec.gpu.count:
         return False

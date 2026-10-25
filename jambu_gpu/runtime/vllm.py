@@ -123,6 +123,16 @@ class VllmRuntime(ModelRuntime):
     def required_cuda(self) -> Optional[float]:
         return vllm_image_cuda(self.image())
 
+    def required_compute_cap(self) -> Optional[float]:
+        # vLLM wheels built for CUDA 13+ drop Volta (sm_70) and need Ampere
+        # (8.0) or newer; those crash at engine-core init on a V100 or older.
+        # CUDA 12.x wheels still run Volta. Pascal (GTX 10xx, 6.1) is below
+        # vLLM's floor on any build.
+        cuda = self.required_cuda()
+        if cuda is None:
+            return None
+        return 8.0 if cuda >= 13.0 else 7.0
+
     def runtime_pid_path(self) -> str:
         return PID_PATH
 

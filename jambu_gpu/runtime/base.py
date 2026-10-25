@@ -116,6 +116,16 @@ class ModelRuntime(ABC):
         """
         return cuda_from_tag(image_tag(self.image()))
 
+    def required_compute_cap(self) -> Optional[float]:
+        """Minimum GPU compute capability (architecture) the runtime needs.
+
+        None if unknown. The offer filter is raised to this, so an image whose
+        kernels are built for newer architectures is never placed on a GPU too
+        old to run them (which the host driver's CUDA alone does not catch: a
+        Volta card behind a CUDA-13 driver still fails at engine startup).
+        """
+        return None
+
     # -- on-instance liveness -------------------------------------------------
 
     def runtime_pid_path(self) -> Optional[str]:

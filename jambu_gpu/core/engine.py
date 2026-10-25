@@ -366,6 +366,7 @@ class Engine:
                 count=cfg.compute.gpu.count,
                 name_filter=cfg.compute.gpu.name_filter,
                 cuda_min=self.cuda_min(),
+                compute_cap_min=self.compute_cap_min(),
             ),
             disk_gb=cfg.compute.disk_gb,
             image=self.runtime.image(),
@@ -388,6 +389,18 @@ class Engine:
         if configured is not None and max_cuda(configured) == needed:
             return configured
         return f"{needed:.1f}"
+
+    def compute_cap_min(self) -> Optional[float]:
+        """The stricter of compute.gpu.compute_cap_min and the runtime's floor."""
+        candidates = [
+            c
+            for c in (
+                self.config.compute.gpu.compute_cap_min,
+                self.runtime.required_compute_cap(),
+            )
+            if c is not None
+        ]
+        return max(candidates) if candidates else None
 
     def _ports(self) -> list[int]:
         ports = list(self.runtime.ports())

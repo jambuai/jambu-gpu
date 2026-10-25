@@ -241,6 +241,19 @@ def test_vast_published_vllm_images_carry_their_cuda(write_config):
         assert VllmRuntime(write_config(compute={"image": image})).required_cuda() == cuda
 
 
+def test_a_vllm_image_floors_the_gpu_architecture(write_config):
+    """CUDA-13 vLLM wheels drop Volta and need Ampere (8.0); 12.x still runs Volta (7.0).
+
+    Caught on a live run: the CUDA-13 image kept landing on the cheapest offers
+    (V100, GTX 1080) whose driver cleared cuda_max_good but whose architecture
+    crashed vLLM's engine-core init."""
+    assert VllmRuntime(write_config(compute={"image": "vastai/vllm:v0.32.0-cuda-13.0"})).required_compute_cap() == 8.0
+    assert VllmRuntime(write_config(compute={"image": "vllm/vllm-openai:v0.32.0"})).required_compute_cap() == 8.0
+    assert VllmRuntime(write_config(compute={"image": "vastai/vllm:v0.29.0-cuda-12.9"})).required_compute_cap() == 7.0
+    # Unknown image CUDA -> no architecture claim.
+    assert VllmRuntime(write_config(compute={"image": "vllm/vllm-openai:nightly"})).required_compute_cap() is None
+
+
 def test_the_start_command_finds_the_python_that_has_vllm(config, tmp_path):
     """vastai/vllm puts a shim first on PATH; vllm lives under /usr/bin/python3."""
     import subprocess

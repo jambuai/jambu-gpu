@@ -79,6 +79,11 @@ class GpuConfig(_Base):
     count: int = 1
     name_filter: Optional[str] = None
     cuda_min: Optional[str] = None
+    # Minimum GPU compute capability (architecture), e.g. 8.0 to require
+    # Ampere or newer. Raised to what the runtime needs; see
+    # ModelRuntime.required_compute_cap. Leave unset to accept the runtime's
+    # own floor.
+    compute_cap_min: Optional[float] = None
 
     @field_validator("count")
     @classmethod
