@@ -91,7 +91,7 @@ each number comes from.
 | `region` | – | Comma-separated geolocations. |
 | `spot` | `false` | Use interruptible/bid capacity where supported. |
 | `host_attempts` | `3` | How many machines `setup` tries. A host that fails to boot (the provider reports it failed, it vanishes, or it is not running within `health.boot_timeout`) is destroyed, replaced from fresh offers (each held to the budget), and remembered in `$GPU_HOME/bad_hosts.json` so no setup rents it again for 24h. A model server that dies once its container runs fails at once, since the same config would fail on any machine, unless its log shows the host's network failed it (a dropped connection or timeout while downloading weights): that counts as a host failure too. Needs `lifecycle.cleanup_on_setup_failure`; without it the first failed host is kept for inspection. |
-| `image` | – | Override the runtime's container image. vLLM's default is `vllm/vllm-openai:v0.32.0`. Pin a tag: `validate` warns on `latest` or an untagged image, because the CUDA it needs can change under you. On Vast, `vastai/vllm:v0.32.0-cuda-13.0` (the same vLLM, packaged by Vast) is often cached on the host and boots in minutes where a 12 GB Docker Hub pull can stall. |
+| `image` | – | Override the runtime's container image. vLLM's default is `vllm/vllm-openai:v0.32.0`, except on Vast, where it is `vastai/vllm:v0.32.0-cuda-13.0`. Pin a tag: `validate` warns on `latest` or an untagged image, because the CUDA it needs can change under you. The Vast default (the same vLLM, packaged by Vast) is cached on many hosts, where the 12 GB Docker Hub image often stalled past `health.boot_timeout`. |
 
 ---
 

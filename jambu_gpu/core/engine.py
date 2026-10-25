@@ -29,6 +29,7 @@ from .errors import (
     ConfigError,
     HostFailure,
     JambuError,
+    LockBusy,
     ProviderError,
     RuntimeStartupError,
     StateError,
@@ -64,6 +65,9 @@ _HOST_NETWORK_FAILURE = re.compile(
 LOG_SOURCES = ("runtime", "onstart", "watchdog", "provider")
 # Runtime log lines quoted in the error when the model server dies at boot.
 STARTUP_FAILURE_LOG_LINES = 30
+# How long read-only commands wait for a busy lock before reporting the last
+# saved state instead: a setup holds it for the whole boot, often 10+ minutes.
+READ_LOCK_WAIT_S = 3.0
 
 
 def _noop(_message: str) -> None:
@@ -86,6 +90,7 @@ class Engine:
         registry = load_builtin_providers()
         self.provider = provider or registry.get(config, self.credentials)
         self.runtime: ModelRuntime = runtime_registry.get(config)
+        self.runtime.provider_image = self.provider.preferred_images.get(self.runtime.engine)
         self.store = StateStore(config.state_dir)
         self.events = EventLog(self.store.logs_dir).bind(provider=self.provider.name)
         # Whether the last reconcile read the watchdog's state. Traffic activity
@@ -561,6 +566,10 @@ class Engine:
                     self._host_failed(state, exc, attempt, attempts, retry)
                     if retry and self._discard_host(state, exc, excluded, bad_hosts):
                         continue
+                    if exc.instance is not None and exc.instance.host_id:
+                        # The last host failed as surely as the others: the
+                        # next setup must not walk straight back onto it.
+                        bad_hosts.mark(self.provider.name, exc.instance.host_id, exc.reason)
                     if retry or attempts == 1:
                         self._fail_setup(state, exc)
                         raise
@@ -1022,10 +1031,18 @@ class Engine:
     # status (spec section 18)
     # ------------------------------------------------------------------
 
+    def _observe(self) -> tuple[RuntimeState, bool]:
+        """Reconciled state, or the last saved one when another command holds the lock."""
+        try:
+            with self.store.process_lock(timeout=READ_LOCK_WAIT_S):
+                state = self._reconcile(self.store.load())
+                self.store.save(state)
+            return state, False
+        except LockBusy:
+            return self.store.load(), True
+
     def status(self) -> dict[str, Any]:
-        with self.store.process_lock():
-            state = self._reconcile(self.store.load())
-            self.store.save(state)
+        state, busy = self._observe()
 
         cfg = self.policy_config(state.hourly_cost_usd)
         idle_skipped = self._idle_blind(state)
@@ -1078,6 +1095,9 @@ class Engine:
                 "remote_state": remote,
             },
             "capabilities": self.provider.capabilities.__dict__,
+            # True while another command (a setup) holds the lock: the state is
+            # the one it last saved, not freshly asked of the provider.
+            "busy": busy,
         }
 
     # ------------------------------------------------------------------
@@ -1260,9 +1280,7 @@ class Engine:
             raise ConfigError(
                 f"unknown log source '{source}' (choose from {', '.join(LOG_SOURCES)})"
             )
-        with self.store.process_lock():
-            state = self._reconcile(self.store.load())
-            self.store.save(state)
+        state, _ = self._observe()
         if not state.instance:
             raise StateError("no instance to read logs from")
         if source != "provider":

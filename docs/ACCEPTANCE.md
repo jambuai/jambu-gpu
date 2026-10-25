@@ -57,6 +57,22 @@ Driven end to end by [`examples/typescript-client`](../examples/typescript-clien
 
 It found two more bugs, both fixed and tested: Vast reports a stopping instance as `running` for a few seconds, which made a setup right after a stop skip the restart; and a Vast rate limit (`429`) failed setup instead of being waited out.
 
+## A coding agent driving it (0.4.0)
+
+On 2026-10-25 a headless Claude Code with no prior context (`claude -p`) was given a fresh directory holding only `gpu agent install`'s skill and `.mcp.json`, plus `VAST_API_KEY` in `.env`. It was asked in one sentence to test Qwen2.5-0.5B on a rented GPU, ask it the capital of Brazil, report time and cost, and destroy the machine. It loaded the `gpu` skill by itself and called `gpu_init` (with the cap and VRAM from the request), `gpu_validate`, `gpu_offers`, then `gpu_setup` until ready, `curl` for the question, `gpu_status`, `gpu_destroy` and `gpu_ls`. The model answered "Brasília", the account was empty at the end, and the agent reported setup time and cost correctly, noting that `session_cost_usd` leaves out the replaced host.
+
+| What was checked | What happened |
+| --- | --- |
+| Setup longer than any tool timeout | `gpu_setup` returned `running` every 300 s for 42 minutes and re-attached to the same background job each time: one machine at a time, never a second setup. |
+| Bad hosts | The first host could not pull the image for 30 minutes; setup destroyed it and rented another, which served. |
+| Cancel | Over MCP (official Python SDK client), `gpu_destroy` during a setup interrupted it like Ctrl-C: the booting machine was destroyed and `gpu_ls` came back empty, 2.3 s after the call. |
+| Protocol | The official MCP Python SDK (2.3.0) client initializes, lists the 13 tools and calls them. |
+
+The first attempt found what the unit tests had not, each fixed and tested:
+- during a setup, `gpu status`, `gpu logs`, `gpu stop` and `gpu destroy` failed on the project lock (reported as "no instance"). Now `status` and `logs` report the last saved state with `busy: true`, the MCP `gpu_stop` / `gpu_destroy` cancel the setup first, and a held lock is its own exit code, 12;
+- the host that failed last when setup gave up was not remembered as bad, so the next setup rented it again;
+- on Vast, three hosts in a row stalled 30 minutes each pulling the 12 GB Docker Hub image, and setup gave up after 90 minutes with nothing left billing. Vast now defaults to `vastai/vllm:v0.32.0-cuda-13.0`, the same vLLM that Vast's hosts cache: in the cancel test the container was running within a minute.
+
 ## The MVP command surface
 
 `jambu.yaml` schema, CLI, provider contract, provider registry, Vast.ai adapter,

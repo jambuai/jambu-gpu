@@ -122,6 +122,10 @@ class VastProvider(GPUProvider):
         # storage, so the core may choose to escalate to destroy.
         stop_eliminates_billing=False,
     )
+    # The same vLLM as vllm/vllm-openai:v0.32.0, packaged by Vast and cached
+    # on many hosts. The Docker Hub image (~12 GB) stalled past the 30-minute
+    # boot timeout on several hosts in live runs; this one is usually already on the host.
+    preferred_images = {"vllm": "vastai/vllm:v0.32.0-cuda-13.0"}
 
     def __init__(self, config: RuntimeConfig, credentials: CredentialResolver) -> None:
         super().__init__(config, credentials)

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
-from .errors import StateError
+from .errors import LockBusy, StateError
 from .models import Instance, InstanceState
 from .policy import Workload as PolicyWorkload
 
@@ -383,7 +383,7 @@ class StateStore:
                     break
                 except BlockingIOError:
                     if time.time() >= deadline:
-                        raise StateError(
+                        raise LockBusy(
                             "another gpu command is holding the runtime lock "
                             f"({self.lock_path}); retry when it finishes"
                         ) from None

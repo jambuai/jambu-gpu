@@ -683,6 +683,10 @@ def test_setup_gives_up_after_host_attempts_and_leaves_nothing_running(
     assert engine.provider.rented_hosts == ["m1", "m2", "m3"]
     assert [r["attempt"] for r in _events(engine, "host_failed")] == [1, 2, 3]
     assert _events(engine, "setup_failed")
+    from jambu_gpu.core.hosts import BadHosts
+
+    # The last host too, not only the two that were replaced.
+    assert sorted(BadHosts().recent("fake")) == ["m1", "m2", "m3"]
 
 
 def test_a_failed_machine_is_never_rented_again(write_config, monkeypatch):
@@ -822,3 +826,23 @@ def test_bad_hosts_expire(tmp_path):
     assert memory.recent("vast", now=1061.0) == []
     (tmp_path / "bad.json").write_text("{not json")
     assert memory.recent("vast") == []  # a corrupt file never blocks a setup
+
+
+def test_status_reads_through_a_setup_holding_the_lock(engine, monkeypatch):
+    """A setup holds the lock for the whole boot; status must not fail for 15 minutes."""
+    from jambu_gpu.core import engine as engine_mod
+    from jambu_gpu.core.errors import LockBusy
+    from jambu_gpu.core.state import StateStore
+
+    engine.setup(wait=False)
+    monkeypatch.setattr(engine_mod, "READ_LOCK_WAIT_S", 0.2)
+    other = StateStore(engine.config.state_dir)
+    with other.process_lock():
+        payload = engine.status()
+        assert payload["busy"] is True
+        assert payload["instance_id"] == engine.store.load().instance_id
+        with pytest.raises(LockBusy) as busy:
+            with StateStore(engine.config.state_dir).process_lock(timeout=0.2):
+                pass
+        assert busy.value.exit_code == 12
+    assert engine.status()["busy"] is False

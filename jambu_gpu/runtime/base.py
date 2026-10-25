@@ -69,11 +69,13 @@ class ModelRuntime(ABC):
 
     def __init__(self, config: RuntimeConfig) -> None:
         self.config = config
+        # Set by the engine from the provider's preferred_images.
+        self.provider_image: Optional[str] = None
 
     # -- container shape ----------------------------------------------------
 
     def image(self) -> str:
-        return self.config.compute.image or self.default_image
+        return self.config.compute.image or self.provider_image or self.default_image
 
     def ports(self) -> list[int]:
         return [self.config.runtime.port]

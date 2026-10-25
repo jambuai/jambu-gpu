@@ -27,6 +27,12 @@ class StateError(JambuError):
     exit_code = 3
 
 
+class LockBusy(StateError):
+    """Another gpu command (usually a setup, for minutes) holds this project's lock."""
+
+    exit_code = 12
+
+
 class ProviderError(JambuError):
     """Base class for every provider-originated failure."""
 

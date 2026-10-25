@@ -11,6 +11,7 @@ import typer
 
 from ..core.errors import JambuError
 from . import account
+from . import agent as agent_cli
 from . import inspect as inspect_cli
 from . import lifecycle, providers, run, setup, status, validate
 from ._common import Context, err_console, get_context, print_json
@@ -67,6 +68,8 @@ app.command("destroy")(lifecycle.destroy_command)
 app.command("guard")(lifecycle.guard_command)
 app.command("ls")(account.ls_command)
 app.command("sweep")(account.sweep_command)
+app.command("mcp")(agent_cli.mcp_command)
+app.add_typer(agent_cli.agent_app, name="agent")
 
 
 @app.command("endpoint")

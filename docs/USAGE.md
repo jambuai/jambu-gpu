@@ -27,6 +27,9 @@ Operator reference. The project front page is the [README](../README.md). Field-
 | `gpu sweep --install-timer` | Write a systemd user timer running `sweep --apply`, and register this project |
 | `gpu endpoint` | Print the model endpoint URL |
 | `gpu env` | Print the base URL, API key and model as shell exports (`--format dotenv\|json`), without starting anything |
+| `gpu agent install` | Give Claude Code (`-t claude`), Cursor (`-t cursor`) or Claude Desktop (`-t desktop`) the gpu skill and MCP server ([AGENTS.md](AGENTS.md)) |
+| `gpu agent skill` | Print the bundled `SKILL.md` |
+| `gpu mcp` | The local MCP server on stdio, started by the agent's client |
 
 Every command accepts `--json` and `--config PATH`. To call `gpu` from an application in any language, see [INTEGRATION.md](INTEGRATION.md).
 

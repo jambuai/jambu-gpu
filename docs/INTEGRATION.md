@@ -111,6 +111,7 @@ gpu env --format dotenv > .env.gpu
 | 9 | the provider cannot do this | change the config |
 | 10 | over `budget.max_hourly_cost_usd` | raise the budget or wait for cheaper offers |
 | 11 | the model server did not start (setup failed, or every host tried failed to boot) | read stderr: it carries the server's log tail; the machine was destroyed |
+| 12 | another `gpu` command holds this project's lock (usually a `setup` still booting) | wait and retry; `status` and `logs` do not fail on it, they report the last saved state with `"busy": true` |
 
 ### Lifecycle the app has to expect
 
@@ -226,7 +227,7 @@ Run `gpu --json setup` as a subprocess, parse the JSON, and point the language's
 | Symptom | Look at |
 | --- | --- |
 | `setup` fails with exit 11 | stderr has the model server's last log lines; `gpu logs --source runtime` |
-| `setup` slow on the first call | `gpu logs --source onstart`; on Vast, `compute.image: vastai/vllm:v0.32.0-cuda-13.0` pulls faster than Docker Hub's `vllm/vllm-openai` |
+| `setup` slow on the first call | `gpu status` (works during setup) and `gpu logs --source onstart`. On Vast the default image is `vastai/vllm`, which most hosts already cache; a project that pins `compute.image: vllm/vllm-openai:...` pulls 12 GB from Docker Hub |
 | `401` from the endpoint | the key changed (a new machine was rented): take it from a fresh `setup` |
 | the machine stopped while the app was busy | `gpu events`; check `idle_timeout` against the longest silence between requests, or `gpu lock` |
 | unsure what is still billing | `gpu ls` lists every jambu instance in the account |

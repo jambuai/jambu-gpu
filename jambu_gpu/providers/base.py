@@ -53,6 +53,10 @@ class GPUProvider(ABC):
     display_name: str = "Abstract"
     required_credentials: list[str] = []
     capabilities: ProviderCapabilities = ProviderCapabilities()
+    # Runtime engine -> the image to use when compute.image is unset. A
+    # provider names the copy its hosts already cache, so a first boot does
+    # not wait on a multi-GB registry pull.
+    preferred_images: dict[str, str] = {}
 
     def __init__(self, config: RuntimeConfig, credentials: CredentialResolver) -> None:
         self.config = config

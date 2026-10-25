@@ -421,3 +421,18 @@ def test_a_gateway_error_is_retried_for_reads_but_not_for_a_create():
     with pytest.raises(ProviderError):
         _client([]).request("PUT", "/asks/777/", json_body={})
     assert create.call_count == 1
+
+
+def test_vast_serves_vllm_from_the_image_its_hosts_cache(write_config, monkeypatch):
+    from jambu_gpu.core.engine import Engine
+
+    monkeypatch.setenv("VAST_API_KEY", "test-key")
+    engine = Engine(write_config())
+    assert engine.runtime.image() == "vastai/vllm:v0.32.0-cuda-13.0"
+    # Same CUDA and architecture floors as the Docker Hub build.
+    assert engine.runtime.required_cuda() == 13.0
+    assert engine.runtime.required_compute_cap() == 8.0
+    assert engine.build_spec().image == "vastai/vllm:v0.32.0-cuda-13.0"
+
+    pinned = Engine(write_config(compute={"image": "vllm/vllm-openai:v0.32.0"}))
+    assert pinned.runtime.image() == "vllm/vllm-openai:v0.32.0"
