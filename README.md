@@ -56,6 +56,10 @@ The file is `jambu.yaml`. This tool reads only the `gpu_runtime:` key, so other 
 - [Adding a provider](docs/ADDING_A_PROVIDER.md)
 - [Contributing](CONTRIBUTING.md)
 
+## Author
+
+[João Gabriel Lima](https://www.linkedin.com/in/joaogabriellima).
+
 ## License
 
 [MIT](LICENSE).
